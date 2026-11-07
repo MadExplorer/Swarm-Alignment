@@ -34,7 +34,7 @@ Agents can submit only other agents' words: the harness rejects `submit` with th
 ## Wording questions for Syakir
 
 - The "harness commands" block and the reset line are our draft wording; please reword freely, keeping the command syntax.
-- Should agents be told how many points they have so far (no running score is shown now)?
+- ~~Should agents be told how many points they have so far?~~ Settled: the swarm score is shown at round start (approved).
 - "submitting is done via a special bash command": keep, or merge into the commands block?
 - Should the prompt say that a passed task is announced as "PASSED" (it is now), or should results stay hidden?
 
