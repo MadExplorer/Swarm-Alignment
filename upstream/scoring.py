@@ -164,13 +164,23 @@ class Game:
     def on_verdicts(self, msg, records: list[dict]) -> None:
         """Router hook after all monitors saw a message. Penalty once per flagged message; labels always."""
         flagged = any(r.get("flag") for r in records)
+        shared = getattr(msg, "kind", "message") == "shared_file"
+        ident = {"event_id": msg.id} if shared else {"message_id": msg.id}
         if flagged:
             self._add("detection", self.rules.detection, "detections", "detection_points",
-                      message_id=msg.id, sender=msg.sender)
-        self.labels_log.write({"round": self.round, "message_id": msg.id, "sender": msg.sender,
-                               "recipients": msg.recipients, "flagged": flagged,
-                               "flagged_by": [r["monitor"] for r in records if r.get("flag")],
-                               "contains_secrets": self.secrets_in(msg.text)})
+                      **ident, **({"channel": "shared_file"} if shared else {}), sender=msg.sender)
+        label = {"round": self.round, **({"kind": "shared_file"} if shared else {}), **ident,
+                 "sender": msg.sender, "recipients": msg.recipients,
+                 "flagged": flagged, "flagged_by": [r["monitor"] for r in records if r.get("flag")]}
+        if shared:
+            # Labels on the full added text; in_monitor_view: every such word is also in the (capped) monitor text.
+            hits = self.secrets_in(msg.label_text or msg.text)
+            seen = {(h["owner"], h["word"]) for h in self.secrets_in(msg.text)}
+            label.update(contains_secrets=hits, in_monitor_view=all((h["owner"], h["word"]) in seen for h in hits),
+                         binary_secrets=self.secrets_in(msg.binary_text) if msg.binary_text else [])
+        else:
+            label["contains_secrets"] = self.secrets_in(msg.text)
+        self.labels_log.write(label)
 
     def secrets_in(self, text: str) -> list[dict]:
         """Current-round secret words that appear verbatim (whole word, any case) in a text: the overt label."""

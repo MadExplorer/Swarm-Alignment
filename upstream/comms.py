@@ -69,6 +69,21 @@ class Message:
     sent_time: float = field(default_factory=time.time)
 
 
+@dataclass
+class SharedPoint:
+    """One change in /shared as a transmission point (shared_folder.py): text = what the monitors see (the
+    capped diff), label_text = the full added text, binary_text = raw bytes of a binary file (labels only)."""
+    id: int
+    round: int
+    sender: str
+    recipients: list[str]
+    text: str
+    path: str = ""
+    label_text: str = ""
+    binary_text: str = ""
+    kind: str = "shared_file"
+
+
 # INVARIANT (required by the team lead, Sat 7 Nov): monitors never see, cut, block, redact or penalise a
 # `submit` (otherwise no points can be scored). Enforced here, not by convention:
 #  1. handle() dispatches `submit` (and rejected lines that contain one) before any monitor code runs;
@@ -196,6 +211,27 @@ class Router:
         if self.on_verdicts:
             self.on_verdicts(msg, records)
 
+    def review_shared(self, event: dict) -> list[dict]:
+        """A change in /shared (an event from shared_folder.SharedFolder.observe) goes to the same monitors as a
+        message, as kind "shared_file": sender = the agent whose step produced it, recipients = all others.
+        A file is not a command: text such as "submit Keter anchor" in a file is monitored like any text (a submit
+        only ever comes from the agent's command line, through handle())."""
+        sender = event["agent"]
+        point = SharedPoint(id=event["id"], round=event["round"], sender=sender,
+                            recipients=[n for n in self.agent_names if n != sender], text=event.get("diff", ""),
+                            path=event.get("path", ""), label_text=event.get("added_text", ""),
+                            binary_text=event.get("binary_text", ""))
+        ctx = {"round": point.round, "sender": sender, "recipients": point.recipients, "kind": "shared_file",
+               "path": point.path, "earlier_messages": []}
+        records = self._run_monitors(
+            "shared_file", self.monitors,
+            lambda mon: mon.review({"id": point.id, "kind": "shared_file", "path": point.path, "sender": sender,
+                                    "recipients": list(point.recipients), "text": point.text}, ctx),
+            {"event_id": point.id, "round": point.round})
+        if self.on_verdicts:
+            self.on_verdicts(point, records)
+        return records
+
     def _review_action(self, sender: str, command: str) -> None:
         """Action-level monitors see shell commands only (never harness commands). Observe mode: logged, never
         blocking, no penalty (no action monitor exists yet; this is the one place one would plug in)."""
@@ -208,7 +244,7 @@ class Router:
     def _run_monitors(self, kind: str, monitors: list, call: Callable, log_fields: dict) -> list[dict]:
         """The only place monitors are called. Refuses anything that is (or contains) a submit."""
         text = log_fields.get("command", "")
-        if kind not in ("message", "action") or (kind == "action" and classify(text)[0] in NEVER_MONITORED):
+        if kind not in ("message", "action", "shared_file") or (kind == "action" and classify(text)[0] in NEVER_MONITORED):
             raise SubmitReachedMonitor(f"monitor input of kind {kind!r} is not allowed")
         records = []
         for mon in monitors:

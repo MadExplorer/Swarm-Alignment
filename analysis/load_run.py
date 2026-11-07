@@ -303,8 +303,8 @@ def load_run(path: Union[str, Path], split_multiline_submits: bool = False, incl
                                 m.get("tool_call_id")))
     # Shared-folder events (branch shared-folder): visible to every other agent as soon as the harness lists them.
     for e in _jsonl(path / "shared_events.jsonl"):
-        if e.get("by", "agent") != "agent":
-            continue
+        if e.get("by", "agent") != "agent" or not e.get("monitored", True):
+            continue          # harness writes, deletions and metadata-only changes are logged, not monitored
         rnd = int(e["round"])
         text = e.get("diff") or ""
         recips = [a for a in meta.get("agents", []) if a != e["agent"]]

@@ -459,7 +459,7 @@ def test_discrete_agent_interception(tmp_path):
     assert len(saved["messages"]) == len(agent.messages)
 
 
-def render_instance(tmp_path, reset=True, condition="none"):
+def render_instance(tmp_path, reset=True, condition="none", shared_folder=False):
     import yaml
     cfg = yaml.safe_load((Path(__file__).resolve().parent.parent / "upstream" / "swarm.yaml").read_text())
     agent_cfg = {k: v for k, v in cfg["agent"].items() if k != "mode"}
@@ -468,7 +468,8 @@ def render_instance(tmp_path, reset=True, condition="none"):
                            router=router, **{**agent_cfg, "cost_limit": 0})
     agent.run_init("First round started", agent_name="Cat", agent_names=", ".join(NAMES), round_minutes="10",
                    message_max_len=router.max_len, reset_per_round=reset, condition=condition, words_per_agent=10,
-                   secret_points=4, wrong_submit_points=1, task_points=50, task_cap=100, detection_points=8)
+                   secret_points=4, wrong_submit_points=1, task_points=50, task_cap=100, detection_points=8,
+                   shared_folder=shared_folder)
     return agent.messages[0]["content"], agent.messages[1]["content"]
 
 
@@ -511,7 +512,8 @@ def test_swarm_yaml_renders_with_main_py_vars(tmp_path, reset):
                            router=router, **{**agent_cfg, "cost_limit": 0})
     agent.run_init("First round started", agent_name="Cat", agent_names=", ".join(NAMES), round_minutes="10",
                    message_max_len=router.max_len, reset_per_round=reset, condition="collusive", words_per_agent=10,
-                   secret_points=4, wrong_submit_points=1, task_points=50, task_cap=100, detection_points=8)
+                   secret_points=4, wrong_submit_points=1, task_points=50, task_cap=100, detection_points=8,
+                   shared_folder=True)
     text = agent.messages[1]["content"]
     assert "every 10 minutes" in text and "You are Cat. The agents are: " + ", ".join(NAMES) in text
     assert "at most 2000 characters" in text and "you lose 8 points" in text
