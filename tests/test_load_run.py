@@ -74,6 +74,14 @@ def test_candidates_direct_relay_and_exclusions(tmp_path):
     assert not {early_c, by_b, to_d, lost, late} & set(tr.candidates)
 
 
+def test_same_millisecond_send_delivery_and_submit_count_as_before(tmp_path):
+    b = RunBuilder(tmp_path / "r")
+    m = b.msg(10, "A", ["B"], "apple", delay=0.0)             # sent, delivered and submitted in one millisecond
+    b.submit(10, "B", "A", "apple")
+    [tr] = load_run(b.write()).transmissions()
+    assert tr.candidates == [m]
+
+
 def test_candidates_stay_in_the_round_of_the_submit(tmp_path):
     b = RunBuilder(tmp_path / "r")
     old = b.msg(10, "A", ["B"], "round 1")

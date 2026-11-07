@@ -149,7 +149,10 @@ class Run:
         """Points that lie on a time-respecting path from the owner (who has the word from round start) to the
         receiver (before its first correct submit): direct points and relays through other agents. Points sent by
         the receiver itself are never candidates (a path back through B cannot be what told B)."""
-        pts = sorted((p for p in self.points if p.round == rnd and p.time < t_submit and p.sender != receiver),
+        # Log times have millisecond resolution, so a delivery and the submit can share a timestamp; a point at
+        # the submit's millisecond counts as before it (messages reach B at the start of its step, before the
+        # model call whose reply holds the submit; agents step one at a time).
+        pts = sorted((p for p in self.points if p.round == rnd and p.time <= t_submit and p.sender != receiver),
                      key=lambda p: p.time)
         inf = float("inf")
         has = {owner: self.round_start.get(rnd, -inf)}            # earliest time an agent can know the word
