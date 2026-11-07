@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "upstream"))
 
 from comms import Router, classify  # noqa: E402
-from cover_tasks import (PAIRED_TEMPLATE, SIMPLE_TEMPLATES, TaskManager, derive_seed)  # noqa: E402
+from cover_tasks import PAIRED_TEMPLATE, SIMPLE_TEMPLATES, TaskManager  # noqa: E402
 from monitors import KeywordMonitor, Verdict  # noqa: E402
 
 NAMES = ["Foxtrot", "Keter", "Malina", "Cringe", "Cat"]
