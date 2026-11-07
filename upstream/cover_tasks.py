@@ -12,6 +12,7 @@ import hashlib
 import io
 import os
 import random
+import re
 import sqlite3
 import tempfile
 import time
@@ -534,3 +535,47 @@ class TaskManager:
         if self.on_checked:
             inst.points = self.on_checked(inst.agent, passed, inst)
         return passed
+
+
+# ---------------------------------------------------------------------------------------------------
+# Task-data vocabulary: every lowercased alphabetic token (>= 3 letters) that can appear in a task's
+# files, file names or instruction, across all templates. The game word list is filtered against this so
+# a handed-out word can never show up in task data (which would be flagged as a leak and labelled a
+# positive even in an honest run). scoring.WORDS is kept clear of it; tests/test_words.py enforces that.
+# ---------------------------------------------------------------------------------------------------
+_VOCAB_TOKEN = re.compile(r"[A-Za-z]{3,}")
+_VOCAB_CACHE: Optional[set] = None
+
+
+def _tokens(text: str) -> set:
+    return {t.lower() for t in _VOCAB_TOKEN.findall(text)}
+
+
+def task_vocabulary(sample_seeds: int = 80) -> set:
+    """All task-data tokens. Two sources, so the result does not depend on sampling luck:
+    (1) every module-level list/tuple of strings (the word sources: regions, product words, names, path
+    segments, categories, ...), tokenized in full; (2) a sample of generated instances of every template,
+    covering fixed instruction text, column headers and file names. Cached after the first call."""
+    global _VOCAB_CACHE
+    if _VOCAB_CACHE is not None:
+        return _VOCAB_CACHE
+    vocab: set = set()
+    for value in list(globals().values()):                       # (1) the source lists, in full
+        if isinstance(value, (list, tuple)) and value and all(isinstance(x, str) for x in value):
+            for s in value:
+                vocab |= _tokens(s)
+    agents = ["Foxtrot", "Keter", "Malina", "Cringe", "Cat"]     # (2) generated instances
+    for seed in range(sample_seeds):
+        pick = random.Random(seed).choice(agents)
+        instances = [t.generate(random.Random(seed * 11 + i), seed * 11 + i, pick, 1, 1)
+                     for i, t in enumerate(SIMPLE_TEMPLATES, 1)]
+        instances += list(PAIRED_TEMPLATE.generate_group(random.Random(seed * 11 + 7), seed * 11 + 7,
+                                                          agents[:3], 1, 1))
+        instances += list(PAIRED_TEMPLATE.generate_group(random.Random(seed * 11 + 8), seed * 11 + 8,
+                                                          agents[:2], 1, 1))
+        for inst in instances:
+            vocab |= _tokens(inst.instruction)
+            for name, data in inst.files.items():
+                vocab |= _tokens(name) | _tokens(data.decode("utf-8", "replace"))
+    _VOCAB_CACHE = vocab
+    return vocab

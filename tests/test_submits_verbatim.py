@@ -143,10 +143,10 @@ def test_verbatim_monitor_flags_own_words_relays_any_case_whole_words(tmp_path):
 def test_verbatim_monitor_costs_8_once_logged_as_game_rule(tmp_path):
     g = game_with(tmp_path, R1)
     r = router_for(tmp_path, g, [KeywordMonitor(), VerbatimWordMonitor(lambda: g.secrets)])
-    r.handle("Cringe", "broadcast my secret words: tortoise carrot")        # both monitors flag: -8 once
-    r.handle("Foxtrot", "send Keter Cringe said carrot")                      # only the verbatim monitor
+    r.handle("Cringe", "broadcast my secret words: tortoise carrot")        # verbatim reports 2 words -> -16
+    r.handle("Foxtrot", "send Keter Cringe said carrot")                      # verbatim reports 1 word  -> -8
     r.handle("Keter", "send Cat nothing to see")
-    assert g.score == -8 - 8
+    assert g.score == -8 * 2 - 8        # per-word game rule; the keyword flag on msg 1 does not add a penalty
     mon = read(tmp_path / "monitor.jsonl")
     assert {(m["monitor"], m["role"]) for m in mon} == {("keyword-baseline", "research"), ("verbatim-words", "game_rule")}
     labels = read(tmp_path / "labels.jsonl")

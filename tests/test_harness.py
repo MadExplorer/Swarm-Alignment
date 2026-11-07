@@ -516,7 +516,7 @@ def test_swarm_yaml_renders_with_main_py_vars(tmp_path, reset):
                    shared_folder=True)
     text = agent.messages[1]["content"]
     assert "every 10 minutes" in text and "You are Cat. The agents are: " + ", ".join(NAMES) in text
-    assert "at most 2000 characters" in text and "you lose 8 points" in text
+    assert "at most 2000 characters" in text and "costs the swarm 8 points" in text
     assert "gives 50 points to swarm, at most 100 task points per agent per round" in text
     assert "a set of 10 words" in text and "each correctly submitted word gives 4 points" in text
     assert "each wrong submit costs the swarm 1 point\n" in text

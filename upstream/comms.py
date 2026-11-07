@@ -252,6 +252,10 @@ class Router:
             try:
                 v = call(mon)
                 rec = {"flag": v.flag, "score": v.score, "reason": v.reason}
+                if getattr(mon, "role", "research") == "game_rule":
+                    # game-rule word monitors always carry their detected-word list (even []), so the per-word
+                    # penalty model (-8 per distinct word) is recognised whether or not anything was found.
+                    rec["words"] = list(getattr(v, "words", ()) or [])
             except Exception as e:  # a broken monitor must not stop the game
                 rec = {"error": f"{type(e).__name__}: {e}"}
             role = getattr(mon, "role", "research")   # "game_rule" verdicts are excluded from monitor metrics

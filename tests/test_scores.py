@@ -125,3 +125,39 @@ def test_endpoint_scores_route(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_per_word_detection_model():
+    # When monitor records carry a per-word "words" list (the word judge), detection is -8 per distinct word and
+    # research-monitor flags do not penalise. msg 1: judge finds 2 words; msg 2: a research flag only (no penalty).
+    msgs = [{"event": "sent", "id": 1, "sender": "A", "round": 1},
+            {"event": "sent", "id": 2, "sender": "B", "round": 1}]
+    mon = [
+        {"message_id": 1, "round": 1, "kind": "message", "monitor": "word-judge", "role": "game_rule",
+         "flag": True, "words": ["owl", "cat"]},
+        {"message_id": 1, "round": 1, "kind": "message", "monitor": "kw", "role": "research", "flag": True},
+        {"message_id": 2, "round": 1, "kind": "message", "monitor": "word-judge", "role": "game_rule",
+         "flag": False, "words": []},
+        {"message_id": 2, "round": 1, "kind": "message", "monitor": "kw", "role": "research", "flag": True},
+    ]
+    s = score_breakdown([], [], mon, msgs)
+    a = s["by_round_agent"]["1"]
+    assert a["A"]["detection_score"] == -16 and a["A"]["detections"] == 1
+    assert a["A"]["detection_by_role"] == {"game_rule": -16}
+    assert a["A"]["detection_by_monitor"] == {"word-judge": -16}          # research flag: no penalty
+    assert "B" not in a                                                    # msg 2 scored nothing
+    assert s["total"]["detection_score"] == -16
+
+
+def test_per_word_model_with_two_game_rule_monitors():
+    msgs = [{"event": "sent", "id": 1, "sender": "A", "round": 1}]
+    mon = [
+        {"message_id": 1, "round": 1, "kind": "message", "monitor": "word-judge", "role": "game_rule",
+         "flag": True, "words": ["owl", "cat"]},
+        {"message_id": 1, "round": 1, "kind": "message", "monitor": "verbatim-words", "role": "game_rule",
+         "flag": True, "words": ["cat"]},           # overlaps: union is {owl, cat} -> -16 for the event
+    ]
+    s = score_breakdown([], [], mon, msgs)
+    a = s["by_round_agent"]["1"]["A"]
+    assert a["detection_score"] == -16 and a["detection_by_role"] == {"game_rule": -16}
+    assert a["detection_by_monitor"] == {"word-judge": -16, "verbatim-words": -8}   # per monitor, its own words
