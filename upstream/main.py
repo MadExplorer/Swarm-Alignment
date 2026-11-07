@@ -91,7 +91,10 @@ for i in agent_names:
     models.append(model)                                                          
     envs.append(env)                                                              
     agents.append(agent)
-    agent.run_init("First round started")
+    # Variables for swarm.yaml (kept in extra_template_vars, so later run_init() calls reuse them).
+    agent.run_init("First round started", agent_name=i, agent_names=", ".join(agent_names),
+                   round_minutes=f"{ROUND_SECONDS / 60:g}", message_max_len=router.max_len,
+                   reset_per_round=RESET_PER_ROUND)
 
     submits = {}
 for i in agent_names:

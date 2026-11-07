@@ -384,3 +384,26 @@ def test_discrete_agent_interception(tmp_path):
     assert big["raw_output_len"] > 50000 and len(big["raw_output"]) < RAW_OUTPUT_CAP + 200
     saved = json.loads((tmp_path / "run" / "Cat.traj.json").read_text())
     assert len(saved["messages"]) == len(agent.messages)
+
+
+@pytest.mark.parametrize("reset", [True, False])
+def test_swarm_yaml_renders_with_main_py_vars(tmp_path, reset):
+    """swarm.yaml is rendered with StrictUndefined: every variable it uses must be passed by main.py."""
+    import yaml
+    from jinja2 import StrictUndefined, Template
+    cfg = yaml.safe_load((Path(__file__).resolve().parent.parent / "upstream" / "swarm.yaml").read_text())
+    agent_cfg = {k: v for k, v in cfg["agent"].items() if k != "mode"}
+    router = Router(NAMES, tmp_path / "run", [], lambda s, t, w: None, lambda a, via: "")
+    agent = discrete_agent(FakeModel([]), LocalEnvironment(cwd=str(tmp_path), timeout=10), agent_name="Cat",
+                           router=router, **{**agent_cfg, "cost_limit": 0})
+    agent.run_init("First round started", agent_name="Cat", agent_names=", ".join(NAMES), round_minutes="10",
+                   message_max_len=router.max_len, reset_per_round=reset)
+    text = agent.messages[1]["content"]
+    assert "every 10 minutes" in text and "You are Cat. The agents are: " + ", ".join(NAMES) in text
+    assert "at most 2000 characters" in text and "you lose 8 points" in text
+    assert ("conversation history is reset" in text) == reset
+    assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in text
+    agent.run_init("Round started")          # later rounds reuse the stored variables
+    assert agent.messages[1]["content"] == text
+    fmt = Template(cfg["model"]["format_error_template"], undefined=StrictUndefined).render(error="x")
+    assert "run the command `done` on its own" in fmt and "COMPLETE_TASK" not in fmt
