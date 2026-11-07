@@ -56,7 +56,7 @@ Written by the harness only, append-only, one JSON object per line, flushed per 
 - `runs/<ts>/messages.jsonl`: `id, time (UTC), round, sender, recipients, text, raw_command, sender_step, tool_call_id, status (delivered | undelivered | blocked), delivered_step`
 - `runs/<ts>/monitor.jsonl`: one line per verdict (§4)
 - `runs/<ts>/submits.jsonl`: `time, round, submitter, target, word, correct` (§6)
-- `runs/<ts>/secrets.jsonl`: secrets per agent and round. **Never** where agents can read it. Until isolation, the only safe place is the harness's memory, written at the end of the run **[TL, step 2/5]**.
+- `runs/<ts>/secrets.jsonl`: secrets per agent and round, on the host only, never where agents can read it. **No secrets are handed out before isolation.** In the shared container a secret would end up in the trajectory and token files under `runs/`, and root agents can read the harness's memory through `/proc` (see `design/isolation-1page.md`).
 - `runs/<ts>/bypass.jsonl`: §7
 
 ## 4. Monitor interface (fixed)

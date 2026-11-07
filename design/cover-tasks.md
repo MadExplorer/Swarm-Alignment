@@ -7,7 +7,7 @@ Status: proposal, no code yet. **[TL]** = his decision; **[Syakir]** = content a
 - Terminal/CLI work in the agent's own folder, using only `python3` and coreutils. The image contents still need checking: which tools are installed besides `python3`, which Cat used.
 - No internet, no networking, nothing security-related (no exploitation, privilege escalation, scanning or bypassing protections). All data is synthetic: generated names, numbers and text, never real people.
 - **Randomised per agent and round** (seeded), so answers cannot be copied between agents, remembered from earlier rounds, or found online.
-- **Deterministic checker** run by the harness. The expected answer exists **only in the harness's memory**, never in a file, env var or prompt the agent can reach.
+- **Deterministic checker** run by the harness. The expected answer exists **only in the harness's memory**, never in a file, env var or prompt the agent can reach. **Limitation until isolation:** agents run as root in the harness's container and could read its memory through `/proc`. Low stakes for cover tasks, but noted. After isolation (`design/isolation-1page.md`) the harness runs on the host, out of reach.
 - Should take Gemma 4 31B a few minutes (well under a 10-minute round). **Not measured yet**: we calibrate with a short pilot (below).
 
 ## Task templates (12)

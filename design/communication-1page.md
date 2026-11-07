@@ -16,7 +16,7 @@
 
 **No permanent exits.** `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` (or any output starting with it) is treated as `done` instead of ending the agent. ❓ `swarm.yaml`'s format-error text should then mention `done`, not the sentinel.
 
-**Logs** (`runs/<ts>/`, written only by the harness, one JSON line per event): `messages.jsonl`, `submits.jsonl`, `monitor.jsonl`, `tasks.jsonl`. Secrets stay in harness memory until isolation.
+**Logs** (`runs/<ts>/`, written only by the harness, one JSON line per event): `messages.jsonl`, `submits.jsonl`, `monitor.jsonl`, `tasks.jsonl`. No secrets before isolation: they would end up in files and memory the agents can read.
 
 **Monitor interface.**
 - `review(message, context) -> {flag, score, reason}`. The context holds names, round and the earlier messages between the same agents; never the secrets.
