@@ -35,3 +35,6 @@
 **Tonight's scope.** `send`/`broadcast`, `submit` with `on_submit()`, `done`, the three logs plus `tasks.jsonl`, the keyword monitor. Later: bypass scan, relay attribution, other monitors.
 
 ❓ Also: a shared folder as a second channel (we suggest no); keep `broadcast`; messages-per-round limit.
+❓ Wrong submits cost nothing, so `submit` can be brute-forced with a word list: penalty or per-round limit?
+❓ Our branch has a minimal round clock; it overlaps your rounds and points (step 5). Keep, replace or merge?
+❓ No secrets before isolation (they would land in files and memory that agents can read). See `design/isolation-1page.md`.

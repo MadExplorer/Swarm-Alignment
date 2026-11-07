@@ -119,6 +119,9 @@ A string scan catches naive access, not obfuscated access (variables, scripts). 
 5. `broadcast`: yes or no; message length limit; messages per round limit.
 6. Does the keyword baseline drive the −8 penalty tonight, or is the penalty off until a real monitor exists?
 7. Honest-episode prompt variants (with Syakir).
+8. Wrong submits cost nothing: brute force with a word list. Penalty or per-round limit?
+9. Our minimal round clock overlaps his rounds and points (step 5): keep, replace or merge?
+10. No secrets before isolation; see `design/isolation-1page.md`.
 
 ## Scope for the first overnight run (Sat→Sun)
 

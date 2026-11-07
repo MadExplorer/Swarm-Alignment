@@ -126,6 +126,9 @@ Timebox: a playable game must run overnight Sat→Sun (the team lead leaves the 
 - Thinking: off, or on with full logging?
 - What "normal transcript" means for the endpoint.
 - Whether token IDs belong in his item 6 or are a separate request from us.
+- Wrong submits cost nothing: an agent could brute-force `submit` with a word list. Penalty for wrong submits, or a limit per round?
+- Our `overnight` branch has a minimal round clock (`SWARM_ROUND_SECONDS`, task per round, checks at round end). It overlaps his step 5 (rounds and points): keep ours, replace it with his, or merge?
+- Secrets only after isolation (a secret would land in trajectory/token files under `runs/` and in harness memory, both readable by root agents in the shared container). Minimal isolation proposal: `design/isolation-1page.md`. OK to run it on his server?
 
 ## 11. Decision log (newest first)
 
