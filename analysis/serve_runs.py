@@ -12,6 +12,8 @@ Routes (GET only; JSON unless format=text):
     /runs/<run>/messages                          messages.jsonl (sent, delivered, rejected, undelivered)
     /runs/<run>/submits                           submits.jsonl
     /runs/<run>/monitor                           monitor.jsonl (role "game_rule" = verbatim-word monitor)
+    /runs/<run>/scores                            score per round and agent (tasks, words, wrong submits, detections
+                                                  by monitor and role), recomputed and checked against the harness
     /runs/<run>/agents/<name>/round/<N>           <name>.r<N>.traj.json (or <name>.traj.json without per-round files)
                                    ?format=text   readable transcript; &max=<chars> caps each tool output (default 2000)
     /runs/<run>/agents/<name>/tokens              <name>.tokens.jsonl (delta-encoded; see README-run-folder.md)
@@ -43,6 +45,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from load_run import score_breakdown
+
 RUN_RE = re.compile(r"\d{8}-\d{6}(-[a-z]+)?\Z")
 AGENT_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,31}\Z")
 LIVE_SECONDS = 600            # no run_end.json and a file changed within this time: "running"
@@ -55,6 +59,7 @@ ROUTES = {
     "/runs/<run>/messages": "messages.jsonl",
     "/runs/<run>/submits": "submits.jsonl",
     "/runs/<run>/monitor": "monitor.jsonl",
+    "/runs/<run>/scores": "score breakdown per round and agent, checked against the harness's score",
     "/runs/<run>/agents/<name>/round/<N>?format=json|text[&max=2000]": "one agent's trajectory for round N",
     "/runs/<run>/agents/<name>/tokens[?full=1][&decode=1][&record=<k>|&round=<N>]":
         "token-ID records (delta-encoded); full=1 adds prompt_token_ids, decode=1 adds prompt_text and completion_text",
@@ -288,6 +293,8 @@ class Handler(BaseHTTPRequestHandler):
             except NotFound:
                 r.run_dir(parts[1])           # unknown run -> 404; known run without the file yet -> []
                 return self._json([])
+        if len(parts) == 3 and parts[0] == "runs" and parts[2] == "scores":
+            return self._json(self._scores(parts[1]))
         if len(parts) == 5 and parts[0] == "runs" and parts[2] == "agents" and parts[4] == "tokens":
             r.check_agent(parts[1], parts[3])
             return self._json(self._tokens(parts[1], parts[3], q))
@@ -306,6 +313,21 @@ class Handler(BaseHTTPRequestHandler):
                 raise NotFound("format must be json or text")
             return self._json(traj)
         raise NotFound("no such route; GET / lists the routes")
+
+    def _scores(self, run: str) -> dict:
+        self.runs.run_dir(run)                                   # unknown run -> 404
+
+        def rows(name):
+            try:
+                return read_jsonl(self.runs.file(run, name))
+            except NotFound:
+                return []
+        try:
+            end = read_json(self.runs.file(run, "run_end.json")) or {}
+        except NotFound:
+            end = {}
+        return score_breakdown(rows("submits.jsonl"), rows("tasks.jsonl"), rows("monitor.jsonl"),
+                               rows("messages.jsonl"), rows("shared_events.jsonl"), rows("score.jsonl"), end)
 
     def _tokens(self, run: str, name: str, q: dict) -> list:
         records = read_jsonl(self.runs.file(run, f"{name}.tokens.jsonl"))
