@@ -1,10 +1,10 @@
 # CLAUDE.md: Swarm Alignment Hackathon, multi-agent sandbox
 
-Context for Claude Code. Read this whole file before doing anything. Status as of Saturday 7 Nov 2026, late morning (CET). Update the "Status" and "Decision log" sections whenever something changes.
+Context for Claude Code. Read this whole file before doing anything. Status as of Sat 7 Nov 2026, 07:35 UTC. All times in this file are UTC. Update the "Status" and "Decision log" sections whenever something changes.
 
 ## 1. The project in one paragraph
 
-We are a team in the Apart Research Swarm Alignment Hackathon (6–8 Nov 2026), Track 4: Multi-Agent Oversight and Control. We build a sandbox where several LLM agents play a game that rewards passing secrets to each other while a monitor watches for that communication, then we evaluate monitors (text-based and activation-based) for detecting collusion/steganography. Submission closes **Sunday 8 Nov, 23:59 AoE (Monday ~13:00 CET)**. Report: ≤ 8 pages, English, official template, with a "Limitations and Dual-Use / Ethical Considerations" appendix.
+We are a team in the Apart Research Swarm Alignment Hackathon (6–8 Nov 2026), Track 4: Multi-Agent Oversight and Control. We build a sandbox where several LLM agents play a game that rewards passing secrets to each other while a monitor watches for that communication, then we evaluate monitors (text-based and activation-based) for detecting collusion/steganography. Submission closes **Sun 8 Nov 23:59 AoE = Mon 9 Nov 11:59 UTC**. Report: ≤ 8 pages, English, official template, with a "Limitations and Dual-Use / Ethical Considerations" appendix.
 
 ## 2. People and who decides
 
@@ -32,13 +32,13 @@ Work split: proposed by Ivan, only partly confirmed by the team lead. Treat it a
 
 - SSH alias on Ivan's Mac: `tl` (`root@92.180.27.84 -p 53221`, key `~/.ssh/GPUVast`). The server is a KVM VM with Docker and 4 × RTX 4090 (24 GB each), all ~93% used by vLLM.
 - Container `Agents` (image `agents:v1.1`, network `bridge`, so agents probably have internet) runs **both** vLLM and the harness, as root. Mounts: `/agents_programm` (code) read-only, `/docker_writeable` read-write (vLLM venv, `stop`, `swarm.yaml`, `mini_default.yaml`).
-- vLLM: `google/gemma-4-31B-it-qat-w4a16-ct`, tensor parallel 4, port 8000 published on the host's 127.0.0.1 only, served names `Foxtrot Keter Malina Cringe Cat` (five aliases of one model), `--enable-auto-tool-choice --tool-call-parser gemma4`, no reasoning parser.
+- vLLM: `google/gemma-4-31B-it-qat-w4a16-ct`, tensor parallel 4, port 8000 published on the host's 127.0.0.1 only, served names `Foxtrot Keter Malina Cringe Cat` (five aliases of one model), `--enable-auto-tool-choice --tool-call-parser gemma4`, no reasoning parser, no `--max-model-len` (so `max_model_len` = 262144, the model default, as reported by `/v1/models`).
 - The image's working directory `/usr/src/app` contains the Dockerfile (184 bytes, ends with `CMD ["bash", "-c", "while true; do sleep 3600; done"]`) and an empty `requirements.txt`. Read the full Dockerfile with `ssh tl 'docker run --rm agents:v1.1 cat /usr/src/app/Dockerfile'` only after asking (it starts a throwaway container), or ask Ivan to paste it.
 
 ### Our reproduction setup (all under `/root/repro/`)
 
 - `/root/repro/docker_writeable/`: mounted as `/docker_writeable` in our `repro` container. Holds our venv (`venv/`, Python 3.12.16, mini-swe-agent 2.4.6, litellm 1.108.1, plus `mcp`, all pinned via `constraints.txt` = his `pip freeze`), copies of `swarm.yaml` and `mini_default.yaml`, our `stop` file, and `runs/`.
-- `/root/repro/agents_v2/`: the code mounted as `/agents_programm` (read-only) in the repro container.
+- `/root/repro/agents_v2/`: the code mounted as `/agents_programm` (read-only) in the repro container. Created Sat 7 Nov 07:35 with the `step1` `main.py` and his unchanged `discrete_agent.py`. (The first reproduction, 05:26–05:47, mounted his `/agents_programm` read-only instead.)
 - Start command (on the host):
   ```bash
   docker run -it --rm --name repro --network container:Agents \
@@ -98,7 +98,7 @@ Not yet verified (check before relying on it): how `DockerEnvironment` accepts e
 | A | **Communication between agents** (assigned by the team lead): harness commands such as `send <AGENT> <text>` intercepted in `execute_actions` before anything runs, delivered to the recipient as a message at its next step, and logged centrally (`runs/<ts>/messages.jsonl`: time, round, sender, recipient, text). This log is the monitor's input. `submit` goes through the same interception. Until isolation, agents can bypass it through the shared filesystem: note that as a limitation | Ivan | Design first, then code. Agree the `submit` part with the team lead. |
 | B | **Cover tasks** (assigned by the team lead): easily verifiable, keep the agent busy, no internet, fit a 10-minute round for Gemma 4 31B. Checkers run in the harness, outside agents' reach, so agents cannot read answers or tests. Prefer our own parameterised task templates with deterministic checkers over integrating a benchmark. Terminal-Bench 2.0 (Merrill et al., ICLR 2026, arXiv 2601.11868) is real but too hard and too heavy here: 89 tasks, each with its own container environment, frontier models score under 65%. Its task format (instruction + verification script + reference solution) is a good model to copy | Ivan (+ Syakir for content) | Not started. |
 | C | **Reasoning logging** (assigned by the team lead): see section 6. First measure, then propose on/off to him | Ivan | Not started. |
-| D | Context trimming before the overnight run: `ContextWindowExceededError` is not retried and ends the agent; ~26.7k tokens after 94 messages | Ivan | Open. Check vLLM's max context length first (read-only). |
+| D | Context trimming before the overnight run: `ContextWindowExceededError` is not retried and ends the agent; ~26.7k tokens after 94 messages | Ivan | Open. vLLM `max_model_len` = 262144 (model default, no `--max-model-len` flag; `/v1/models`, Sat 07:35). Not yet checked: KV-cache capacity for 5 long contexts at once (vLLM startup log). |
 
 Timebox: a playable game must run overnight Sat→Sun (the team lead leaves the server on). Sunday: monitors, analysis, report.
 
