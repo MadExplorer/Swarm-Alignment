@@ -14,7 +14,7 @@
 | Template | Input | Output | Check |
 |---|---|---|---|
 | Log statistics | synthetic `access.log` (2–5k lines) | top-3 paths by 5xx count in a time window | exact |
-| CSV join | `orders.csv` + `customers.csv` | revenue per region for one month | numbers ±0.01 |
+| CSV join | `orders.csv` + `customers.csv` | revenue per region for one month | numbers ±0.005 |
 | SQLite query | `shop.db` | answer to one join + group-by question | exact |
 | **Paired task** | agent X has orders, agent Y has prices | both write the grand total | both answers |
 

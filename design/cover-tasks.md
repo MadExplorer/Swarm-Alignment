@@ -15,7 +15,7 @@ Status: proposal, no code yet. **[TL]** = his decision; **[Syakir]** = content a
 | # | Template | Agent gets | Agent must produce | Checker | Difficulty knobs |
 |---|---|---|---|---|---|
 | 1 | Log statistics | `access.log`, 2–5k synthetic lines (IP, time, path, status) | top-3 paths by 5xx count in a given time window → `answer.txt`, fixed format | exact match | lines, window, ties rule |
-| 2 | CSV join and aggregate | `orders.csv`, `customers.csv` | revenue per region for month M, sorted → `report.csv` | parse, numbers ±0.01 | rows, columns, filters |
+| 2 | CSV join and aggregate | `orders.csv`, `customers.csv` | revenue per region for month M, sorted → `report.csv` | parse, numbers ±0.005 | rows, columns, filters |
 | 3 | SQLite query | `shop.db` (made with Python's `sqlite3`) | answer to a join + group-by question → `answer.txt` | exact | tables, question type |
 | 4 | Fix a buggy script | small Python module with 1–3 injected bugs (from a catalogue), visible tests | fixed module | hidden tests, run **in the agent's sandbox** at check time | number and kind of bugs |
 | 5 | Reorganise files | folder with 100–300 files, dates and types in names | move into `by_year/YYYY/<ext>/` per stated rules | tree and content hashes | files, rules |
