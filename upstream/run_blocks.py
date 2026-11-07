@@ -7,8 +7,9 @@ Each block is one `python main.py` (not -i) with SWARM_CONDITION, SWARM_MAX_ROUN
 (<timestamp>-<condition>) and records condition, block and max rounds in run_meta.json. Every other setting
 (SWARM_ISOLATION=container, SWARM_RUN_DIR, SWARM_ROUND_SECONDS, ...) is taken from the environment.
 
-    python run_blocks.py --rounds 6                        # collusive, then honest
+    python run_blocks.py --rounds 6                        # collusive, then honest, 6 rounds each
     python run_blocks.py --rounds 2 --order collusive      # one block
+    python run_blocks.py --order collusive:18,honest:9     # rounds per block
 
 Ctrl-C reaches the running block too (same terminal); this script then waits for that block's own cleanup
 (shared dirs recorded, container removed, run_end.json) and starts no further block. It never kills a block.
@@ -35,24 +36,36 @@ def block_env(base: dict, condition: str, rounds: int, seed: int, label: str) ->
 
 def main(argv=None, runner=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--rounds", type=int, required=True, help="rounds per block (> 0)")
-    ap.add_argument("--order", default="collusive,honest", help="comma-separated conditions")
+    ap.add_argument("--rounds", type=int, help="rounds per block (> 0), for blocks without their own count")
+    ap.add_argument("--order", default="collusive,honest",
+                    help="comma-separated conditions, each optionally with its own round count: collusive:18,honest:9")
     args = ap.parse_args(argv)
-    order = [c for c in args.order.split(",") if c]
-    if args.rounds <= 0 or not order or any(c not in ("collusive", "honest") for c in order):
-        ap.error("--rounds must be > 0 and --order a list of collusive/honest")
+    order = []
+    for item in (x.strip() for x in args.order.split(",") if x.strip()):
+        cond, _, n = item.partition(":")
+        if cond not in ("collusive", "honest"):
+            ap.error(f"unknown condition {cond!r} in --order (collusive or honest)")
+        try:
+            rounds = int(n) if n else args.rounds
+        except ValueError:
+            ap.error(f"bad round count in {item!r}")
+        if rounds is None or rounds <= 0:
+            ap.error(f"block {item!r} needs a round count > 0 (--rounds N or {cond}:N)")
+        order.append((cond, rounds))
+    if not order:
+        ap.error("--order is empty")
     if os.environ.get("SWARM_ISOLATION") != "container":
         ap.error("set SWARM_ISOLATION=container (conditions need secrets, secrets need isolation)")
     runner = runner or run_block
     seeds: set[int] = set()
-    for k, condition in enumerate(order, 1):
+    for k, (condition, rounds) in enumerate(order, 1):
         seed = new_seed()
         while seed in seeds:
             seed = new_seed()
         seeds.add(seed)
         label = f"{k}/{len(order)} {condition}"
-        print(f"=== block {label}: {args.rounds} rounds ===", flush=True)
-        rc = runner(block_env(dict(os.environ), condition, args.rounds, seed, label))
+        print(f"=== block {label}: {rounds} rounds ===", flush=True)
+        rc = runner(block_env(dict(os.environ), condition, rounds, seed, label))
         if rc != 0:
             print(f"=== block {label} ended with exit code {rc}; no further blocks ===", flush=True)
             return rc

@@ -112,7 +112,7 @@ def test_broadcast_and_submit(tmp_path):
     r = make_router(tmp_path, on_submit=lambda s, t, w: calls.append((s, t, w)) or True)
     r.handle("Cat", "broadcast hello everyone")
     assert all(len(r.queues[n]) == 1 for n in NAMES if n != "Cat") and not r.queues["Cat"]
-    assert "submitted 'apple pie'" in r.handle("Cat", "submit Keter 'apple pie'")["output"]
+    assert r.handle("Cat", "submit Keter 'apple pie'")["output"] == "recorded: Keter / apple pie"
     assert calls == [("Cat", "Keter", "apple pie")]
     assert "other agents" in r.handle("Cat", "submit Cat apple")["output"]
     assert read_jsonl(tmp_path / "submits.jsonl")[0]["correct"] is True

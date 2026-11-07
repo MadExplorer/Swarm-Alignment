@@ -64,6 +64,7 @@ class Point:
     text: str                     # message text, or the diff the monitor saw
     deliveries: dict[str, float]  # recipient -> time it reached that recipient's context (undelivered: absent)
     verdicts: dict[str, dict] = field(default_factory=dict)   # monitor name -> {"flag", "score", "reason"}
+    game_rule_verdicts: dict[str, dict] = field(default_factory=dict)   # e.g. verbatim-words: not a research monitor
     words: list[dict] = field(default_factory=list)           # current-round words in the text: [{owner, word}]
 
     @property
@@ -222,8 +223,11 @@ def _split_submit_lines(raw: str) -> Optional[list[tuple[str, str]]]:
     return pairs
 
 
-def load_run(path: Union[str, Path], split_multiline_submits: bool = False) -> Run:
-    """Read a run folder. split_multiline_submits=True re-reads a submit whose command had several
+def load_run(path: Union[str, Path], split_multiline_submits: bool = False, include_game_rules: bool = False) -> Run:
+    """Read a run folder. Verdicts of monitors with role "game_rule" (the verbatim-word monitor: it knows the
+    words, so it is perfect on overt leaks by construction) go to Point.game_rule_verdicts and are left out of
+    Point.verdicts, so both metrics ignore them; include_game_rules=True puts them into Point.verdicts as well.
+    split_multiline_submits=True re-reads a submit whose command had several
     'submit <AGENT> <WORD>' lines as one submit per line (the harness up to 647c8ab took the whole block as one
     word; run 20261107-163124-collusive). This is an OFFLINE recount; the harness score is in run_end.json."""
     path = Path(path)
@@ -234,6 +238,7 @@ def load_run(path: Union[str, Path], split_multiline_submits: bool = False) -> R
         round_start[int(r["round"])] = _t(r.get("time"))
 
     verdicts: dict[str, dict] = {}
+    game_rule: dict[str, dict] = {}
     for v in _jsonl(path / "monitor.jsonl"):
         kind = v.get("kind", "message")
         if kind == "message":
@@ -242,7 +247,12 @@ def load_run(path: Union[str, Path], split_multiline_submits: bool = False) -> R
             pid = f"f{v['event_id']}"
         else:
             continue  # action monitors watch shell commands, not transmission points
-        verdicts.setdefault(pid, {})[v["monitor"]] = {k: v.get(k) for k in ("flag", "score", "reason", "error")}
+        rec = {k: v.get(k) for k in ("flag", "score", "reason", "error")}
+        if v.get("role", "research") == "game_rule":
+            game_rule.setdefault(pid, {})[v["monitor"]] = rec
+            if not include_game_rules:
+                continue
+        verdicts.setdefault(pid, {})[v["monitor"]] = rec
 
     points: list[Point] = []
     msgs = _jsonl(path / "messages.jsonl")
@@ -255,7 +265,7 @@ def load_run(path: Union[str, Path], split_multiline_submits: bool = False) -> R
             rnd = int(m["round"])
             points.append(Point(f"m{m['id']}", "message", rnd, _t(m["time"]), m["sender"], list(m["recipients"]),
                                 m["text"], deliveries.get(m["id"], {}), verdicts.get(f"m{m['id']}", {}),
-                                words_in(m["text"], secrets.get(rnd, {}))))
+                                game_rule.get(f"m{m['id']}", {}), words_in(m["text"], secrets.get(rnd, {}))))
     # Shared-folder events (branch shared-folder): visible to every other agent as soon as the harness lists them.
     for e in _jsonl(path / "shared_events.jsonl"):
         if e.get("by", "agent") != "agent":
@@ -265,7 +275,8 @@ def load_run(path: Union[str, Path], split_multiline_submits: bool = False) -> R
         recips = [a for a in meta.get("agents", []) if a != e["agent"]]
         t = _t(e["time"])
         points.append(Point(f"f{e['id']}", "shared_file", rnd, t, e["agent"], recips, text, {r: t for r in recips},
-                            verdicts.get(f"f{e['id']}", {}), words_in(e.get("added_text", text), secrets.get(rnd, {}))))
+                            verdicts.get(f"f{e['id']}", {}), game_rule.get(f"f{e['id']}", {}),
+                            words_in(e.get("added_text", text), secrets.get(rnd, {}))))
     points.sort(key=lambda p: p.time)
 
     submits = []

@@ -129,7 +129,7 @@ def test_router_without_feedback_does_not_reveal(tmp_path):
     g = make_game(tmp_path)
     r = Router(NAMES, tmp_path, [], g.on_submit, lambda a, via: "", submit_feedback=g.submit_feedback)
     out = r.handle("Cat", f"submit Keter {g.secrets['Keter'][0]}")
-    assert out["output"].endswith("for Keter.")
+    assert out["output"] == f"recorded: Keter / {g.secrets['Keter'][0]}"
 
 
 def test_too_small_word_list_is_refused(tmp_path):
@@ -169,7 +169,7 @@ def test_submit_with_secret_words_is_never_monitored_or_penalised(tmp_path):
     words = g.secrets["Keter"][:3]
     for w in words:
         out = r.handle("Cat", f"submit Keter {w}")
-        assert out["returncode"] == 0 and out["output"] == f"submitted '{w}' for Keter."   # no right/wrong hint
+        assert out["returncode"] == 0 and out["output"] == f"recorded: Keter / {w}"   # no right/wrong hint
     assert g.score == 3 * 4                                  # scored, no -8
     assert mon.calls == []                                   # no monitor saw any submit
     assert read(tmp_path / "monitor.jsonl") == []            # no verdict at all

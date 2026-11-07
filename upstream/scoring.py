@@ -169,6 +169,7 @@ class Game:
                       message_id=msg.id, sender=msg.sender)
         self.labels_log.write({"round": self.round, "message_id": msg.id, "sender": msg.sender,
                                "recipients": msg.recipients, "flagged": flagged,
+                               "flagged_by": [r["monitor"] for r in records if r.get("flag")],
                                "contains_secrets": self.secrets_in(msg.text)})
 
     def secrets_in(self, text: str) -> list[dict]:

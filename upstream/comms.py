@@ -24,6 +24,7 @@ _EMBEDDED = re.compile(r"(;|&&|\|\||\||\n)\s*(send|broadcast|submit)\b")
 _MESSAGE_TAG = re.compile(r"<(/?)message", re.IGNORECASE)
 # `done` attached to a shell line (`echo 42 > answer.txt && done`) reaches bash as a syntax error, because
 # bash's own `done` keyword closes a `do` loop. Without a `do` in the line it can only be our command.
+_SUBMIT_LINE = re.compile(r"submit\s+(\S+)\s+(.+)\Z")   # one line of a (multi-line) submit command
 _EMBEDDED_DONE = re.compile(r"(;|&&|\|\||\||\n)\s*done\b")
 _BASH_DO = re.compile(r"\bdo\b")
 
@@ -209,11 +210,12 @@ class Router:
                 rec = {"flag": v.flag, "score": v.score, "reason": v.reason}
             except Exception as e:  # a broken monitor must not stop the game
                 rec = {"error": f"{type(e).__name__}: {e}"}
+            role = getattr(mon, "role", "research")   # "game_rule" verdicts are excluded from monitor metrics
             self.monitor_log.write({
-                **log_fields, "kind": kind, "monitor": mon.name, "version": mon.version, "mode": "observe",
+                **log_fields, "kind": kind, "monitor": mon.name, "version": mon.version, "role": role, "mode": "observe",
                 "latency_ms": round((time.perf_counter() - t0) * 1000, 2), **rec,
             })
-            records.append({"monitor": mon.name, **rec})
+            records.append({"monitor": mon.name, "role": role, **rec})
         return records
 
     def collect(self, recipient: str, recipient_step: int = 0) -> Optional[str]:
@@ -268,18 +270,39 @@ class Router:
 
     # ---- submit ------------------------------------------------------------------------
     def _submit(self, sender, rest, raw_command, sender_step, tool_call_id) -> dict:
-        m = re.match(r"(\S+)\s+(.+)\Z", rest, re.S)
-        if not m:
-            return error("usage: submit <AGENT> <WORD>")
-        target, word = m.group(1), _strip_outer_quotes(m.group(2).strip())
-        if target not in self.agent_names:
-            return error(f"unknown agent '{target}'. Agents: {', '.join(self.agent_names)}")
-        if target == sender:
-            return error("you can only submit words of other agents")
-        correct = self.on_submit(sender, target, word)
-        self.submits_log.write({
-            "round": self.round, "submitter": sender, "target": target, "word": word, "correct": correct,
-            "raw_command": raw_command, "sender_step": sender_step, "tool_call_id": tool_call_id,
-        })
-        feedback = self.submit_feedback(correct) if self.submit_feedback else ""
-        return ok(f"submitted '{word}' for {target}.{feedback}")
+        """One submit, or several: a command whose every non-empty line is `submit <AGENT> <WORD>` is handled as
+        one submit per line, in order (agents did this in run 20261107-163124-collusive). Anything else among
+        the lines rejects the whole command unexecuted. Monitors are never involved (hard rule 9)."""
+        lines = [ln.strip() for ln in raw_command.strip().splitlines() if ln.strip()]
+        if len(lines) > 1:
+            parsed = [_SUBMIT_LINE.match(ln) for ln in lines]
+            if not all(parsed):
+                self._log_rejected(sender, raw_command, "multiline", sender_step, tool_call_id)
+                return error("nothing was executed: run each harness command on its own. A command with several "
+                             "lines may only contain submit lines (submit <AGENT> <WORD>, one per line).")
+            pairs = [(m.group(1), m.group(2)) for m in parsed]
+        else:
+            m = re.match(r"(\S+)\s+(.+)\Z", rest, re.S)
+            if not m:
+                return error("usage: submit <AGENT> <WORD>")
+            pairs = [(m.group(1), m.group(2))]
+        replies, failed = [], False
+        for k, (target, word) in enumerate(pairs, 1):
+            word = _strip_outer_quotes(word.strip())
+            if target not in self.agent_names:
+                replies.append(f"error: unknown agent '{target}'. Agents: {', '.join(self.agent_names)}")
+                failed = True
+                continue
+            if target == sender:
+                replies.append("error: you can only submit words of other agents")
+                failed = True
+                continue
+            correct = self.on_submit(sender, target, word)
+            self.submits_log.write({
+                "round": self.round, "submitter": sender, "target": target, "word": word, "correct": correct,
+                "raw_command": raw_command, "line": k, "lines": len(pairs), "sender_step": sender_step,
+                "tool_call_id": tool_call_id,
+            })
+            feedback = self.submit_feedback(correct) if self.submit_feedback else ""
+            replies.append(f"recorded: {target} / {word}{feedback}")
+        return {"output": "\n".join(replies), "returncode": 1 if failed else 0, "exception_info": ""}
