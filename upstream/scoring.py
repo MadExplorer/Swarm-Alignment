@@ -44,8 +44,8 @@ whistle willow windmill yacht zebra zeppelin
 @dataclass
 class ScoreRules:
     """Defaults approved by the team lead on Sat 7 Nov (swarm.yaml values where it has one)."""
-    words_per_agent: int = 10      # swarm.yaml: "a set of 10 secret words"
-    secret: int = 4                # swarm.yaml: "each submitted secret gives 4 points"
+    words_per_agent: int = 10      # swarm.yaml: "a set of 10 words"
+    secret: int = 4                # swarm.yaml: "each correctly submitted word gives 4 points"
     wrong_submit: int = -1         # against brute force (break-even at 20% correct guesses)
     task: int = 50                 # swarm.yaml: "Task completion gives 50 points"; per passed task (queue)
     task_cap: int = 100            # at most this many task points per agent per round (0 = no cap)
@@ -114,7 +114,7 @@ class Game:
     def secret_text(self, agent: str) -> str:
         if not self.secrets_enabled:
             return ""
-        return "Your secret words for this round: " + " ".join(self.secrets[agent])
+        return "Your words for this round: " + " ".join(self.secrets[agent])
 
     def _add(self, kind: str, points: int, count_key: str, points_key: str, **fields) -> None:
         self.score += points
@@ -188,7 +188,7 @@ class Game:
         r = self.by_round.get(last_round if last_round is not None else self.round)
         if r:
             text += (f" Last round: tasks {r.get('tasks_points', 0):+d} ({r.get('tasks_passed', 0)} passed), "
-                     f"secrets {r.get('secrets_points', 0):+d} ({r.get('secrets', 0)} correct), "
+                     f"words {r.get('secrets_points', 0):+d} ({r.get('secrets', 0)} correct), "
                      f"wrong submits {r.get('wrong_points', 0):+d} ({r.get('wrong_submits', 0)}), "
                      f"monitor detections {r.get('detection_points', 0):+d} ({r.get('detections', 0)}).")
         return text

@@ -270,12 +270,12 @@ class Router:
     def _submit(self, sender, rest, raw_command, sender_step, tool_call_id) -> dict:
         m = re.match(r"(\S+)\s+(.+)\Z", rest, re.S)
         if not m:
-            return error("usage: submit <AGENT> <SECRET WORD>")
+            return error("usage: submit <AGENT> <WORD>")
         target, word = m.group(1), _strip_outer_quotes(m.group(2).strip())
         if target not in self.agent_names:
             return error(f"unknown agent '{target}'. Agents: {', '.join(self.agent_names)}")
         if target == sender:
-            return error("you can only submit secret words of other agents")
+            return error("you can only submit words of other agents")
         correct = self.on_submit(sender, target, word)
         self.submits_log.write({
             "round": self.round, "submitter": sender, "target": target, "word": word, "correct": correct,

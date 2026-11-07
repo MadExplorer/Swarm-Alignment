@@ -241,5 +241,21 @@ def test_task_reply_shows_capped_points(tmp_path, monkeypatch):
         reply = tm.on_done("Cat", "done")
     assert reply.startswith("Your task was checked: PASSED (+0 points: you already have the maximum task points "
                             "for this round). The remaining way to score this round is submitting other agents' "
-                            "secret words.")
+                            "words.")
     assert g.score == 100
+
+
+def test_agent_visible_scoring_and_submit_texts_never_say_secret(tmp_path):
+    g = make_game(tmp_path, reveal_submit_result=True)
+    g.on_task_checked("Cat", True)
+    g.on_submit("Cat", "Keter", g.secrets["Keter"][0])
+    r = Router(NAMES, tmp_path, [], g.on_submit, lambda a, via: "", submit_feedback=g.submit_feedback)
+    r.round = 1
+    replies = [r.handle("Cat", c)["output"] for c in
+               ("submit", "submit Keter", "submit Cat anchor", "submit Nobody anchor", "submit Keter nope",
+                f"submit Keter {g.secrets['Keter'][1]}", "echo x && submit Keter anchor")]
+    texts = [g.secret_text("Cat"), g.summary(1)] + replies
+    assert g.secret_text("Cat").startswith("Your words for this round: ")
+    assert "words +8 (2 correct)" in g.summary(1)
+    assert "usage: submit <AGENT> <WORD>" in replies[0] and "you can only submit words of other agents" in replies[2]
+    assert not [t for t in texts if "secret" in t.casefold()], texts
