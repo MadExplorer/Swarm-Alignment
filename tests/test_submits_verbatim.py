@@ -70,7 +70,7 @@ def router_for(tmp_path, g, monitors=()):
 
 
 # ---- multi-line submits ----------------------------------------------------------------------------
-def test_real_foxtrot_command_is_ten_submits_in_order(tmp_path):
+def test_recorded_foxtrot_command_is_ten_submits_in_order(tmp_path):
     g = game_with(tmp_path, R1)
     spy = Spy()
     out = router_for(tmp_path, g, [spy]).handle("Foxtrot", FOXTROT_R1)
@@ -84,7 +84,7 @@ def test_real_foxtrot_command_is_ten_submits_in_order(tmp_path):
     assert spy.seen == [] and read(tmp_path / "monitor.jsonl") == []                     # hard rule 9
 
 
-def test_real_malina_command_with_done_is_rejected_unexecuted(tmp_path):
+def test_recorded_malina_command_with_done_is_rejected_unexecuted(tmp_path):
     g = game_with(tmp_path, R1)
     spy = Spy()
     out = router_for(tmp_path, g, [spy]).handle("Malina", MALINA_R1)
@@ -95,7 +95,7 @@ def test_real_malina_command_with_done_is_rejected_unexecuted(tmp_path):
     assert spy.seen == []                                                                # not even as an action
 
 
-def test_real_cat_command_with_trailing_newline(tmp_path):
+def test_recorded_cat_command_with_trailing_newline(tmp_path):
     g = game_with(tmp_path, R2, rnd=2)
     out = router_for(tmp_path, g).handle("Cat", CAT_R2)
     assert out["output"].splitlines() == [f"recorded: Malina / {w}" for w in R2["Malina"]]
@@ -183,3 +183,41 @@ def test_load_run_leaves_game_rule_verdicts_out_of_metrics(tmp_path):
     assert transmission_recall([run], "verbatim-words")["caught"] == 0
     full = load_run(tmp_path, include_game_rules=True)
     assert transmission_recall([full], "verbatim-words")["caught"] == 1
+
+
+# ---- multi-line send/broadcast with further harness commands -----------------------------------------
+REAL_SENDS = json.loads((ROOT / "tests" / "data" / "multiline_sends.json").read_text())
+
+
+def test_recorded_malina_and_cringe_sends_are_rejected_unexecuted(tmp_path):
+    g = game_with(tmp_path, R1)
+    done_calls = []
+    spy = Spy()
+    r = Router(NAMES, tmp_path, [spy], g.on_submit, lambda a, via: done_calls.append(a) or "", on_verdicts=g.on_verdicts,
+               action_monitors=[spy])
+    r.round = 2
+    for sender, key in (("Malina", "malina_r2_send"), ("Cringe", "cringe_r2_send")):
+        out = r.handle(sender, REAL_SENDS[key])
+        assert out["returncode"] == 1
+        assert out["output"].startswith("error: nothing was executed: run each harness command on its own")
+    msgs = read(tmp_path / "messages.jsonl")
+    assert [m["event"] for m in msgs] == ["rejected", "rejected"] and {m["reason"] for m in msgs} == {"multiline"}
+    assert [m["raw_command"] for m in msgs] == [REAL_SENDS["malina_r2_send"], REAL_SENDS["cringe_r2_send"]]
+    assert not any(r.queues.values()) and done_calls == [] and spy.seen == []   # nothing sent, done not run
+    assert read(tmp_path / "monitor.jsonl") == [] and g.score == 0
+
+
+def test_multiline_message_text_is_still_allowed(tmp_path):
+    g = game_with(tmp_path, R1)
+    r = router_for(tmp_path, g)
+    ok_texts = ["send Keter Prices:\npart-004,13.60\npart-006,11.80", "broadcast line one\n\nline three",
+                "send Keter we are\nsending soon\nsubmitting later\nalmost done-ish? no: done_ish",
+                "send Keter quote:\n  > earlier text"]
+    for cmd in ok_texts:
+        assert r.handle("Cat", cmd)["returncode"] == 0, cmd
+    assert [m.text for m in r.queues["Keter"]][0] == "Prices:\npart-004,13.60\npart-006,11.80"
+    for cmd in ("send Keter hi\nsubmit Keter x", "broadcast hi\n  send Keter x", "send Keter a\ndone",
+                "broadcast a\nbroadcast b", "send Keter a\ndone now"):
+        out = r.handle("Cat", cmd)
+        assert out["returncode"] == 1 and "run each harness command on its own" in out["output"], cmd
+    assert read(tmp_path / "submits.jsonl") == []

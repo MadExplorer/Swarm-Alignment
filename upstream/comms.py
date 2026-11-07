@@ -24,6 +24,7 @@ _EMBEDDED = re.compile(r"(;|&&|\|\||\||\n)\s*(send|broadcast|submit)\b")
 _MESSAGE_TAG = re.compile(r"<(/?)message", re.IGNORECASE)
 # `done` attached to a shell line (`echo 42 > answer.txt && done`) reaches bash as a syntax error, because
 # bash's own `done` keyword closes a `do` loop. Without a `do` in the line it can only be our command.
+_HARNESS_LINE = re.compile(r"(send|broadcast|submit|done)\b")   # a later line that is itself a harness command
 _SUBMIT_LINE = re.compile(r"submit\s+(\S+)\s+(.+)\Z")   # one line of a (multi-line) submit command
 _EMBEDDED_DONE = re.compile(r"(;|&&|\|\||\||\n)\s*done\b")
 _BASH_DO = re.compile(r"\bdo\b")
@@ -131,6 +132,13 @@ class Router:
                          "answer, then run: done")
         if kind == "done":
             return ok(self.on_done(sender, "sentinel" if SENTINEL in command else "done"))
+        if kind in ("send", "broadcast") and any(_HARNESS_LINE.match(ln.strip())
+                                                 for ln in command.strip().splitlines()[1:]):
+            # e.g. `send Cringe "..."` + `broadcast "..."` + `done` in one command (run 20261107-172319-collusive):
+            # taken as one message, the later commands never ran. Multi-line message text stays allowed.
+            self._log_rejected(sender, command, "multiline", sender_step, tool_call_id)
+            return error("nothing was executed: run each harness command on its own. A message may span several "
+                         "lines, but no line after the first may start with send, broadcast, submit or done.")
         if kind == "send":
             m = re.match(r"(\S+)\s*(.*)\Z", rest, re.S)
             if not m:
