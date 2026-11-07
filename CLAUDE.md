@@ -19,7 +19,7 @@ Work split: proposed by Ivan, only partly confirmed by the team lead. Treat it a
 
 ## 3. HARD RULES (never break these)
 
-1. **Never modify, stop, restart or remove anything of the team lead's** on the server: the folders `/agents_programm` and `/docker_writeable` on the host, the container `Agents`, the vLLM server inside it, his `python -i main.py` process (PID 64997 at time of writing), his tmux session, and the images `agents:v1.0` / `agents:v1.1`.
+1. **Never modify, stop, restart or remove anything of the team lead's** on the server: the folders `/agents_programm` and `/docker_writeable` on the host, the container `Agents`, the vLLM server inside it, his `python -i main.py` process (PID 64997; **exception:** he approved stopping it with SIGTERM on Sat 7 Nov, see the decision log), his tmux session (never type into it), and the images `agents:v1.0` / `agents:v1.1`.
 2. **On the server, only write under `/root/repro/`**, and only use containers named `repro`. Read-only commands elsewhere (`ls`, `cat`, `grep`, `diff`, `docker ps`, `docker inspect`, `docker top`, `docker exec Agents <read-only command>`) are fine.
 3. **Ask Ivan before any server command that writes, starts a container, or sends traffic to vLLM.** Show the exact command first.
 4. **Changes to the team lead's code are proposals.** Produce them as a unified diff against his exact current file (`diff -u`), never as a rewrite from memory. Never apply them to `/agents_programm` yourself.
@@ -136,6 +136,7 @@ Timebox: a playable game must run overnight Sat→Sun (the team lead leaves the 
 
 | Date | Decision | Who | Why |
 |------|----------|-----|-----|
+| Sat 7 Nov | Stop his idle `python -i main.py` (PID 64997) with `kill -TERM` (SIGINT does nothing at an idle `>>>`); check first that the PID is still his `main.py`; afterwards verify vLLM still answers and `docker top Agents` still shows it. No typing into his tmux, no other change to vLLM or `Agents`. `/agents_programm` is **not** replaced yet: only once the host harness with isolation is ready and tested, and only after a timestamped backup (`cp -a /agents_programm /root/backup/agents_programm-<UTC timestamp>`, plus his `/docker_writeable/swarm.yaml` and `stop`) | Team lead (approved on Discord, 16:02 his local time), carried out by Ivan | The process had been idle for hours (5 s of CPU in ~7 h 43 min); frees the way for the host harness |
 | Sat 7 Nov | Step 1 stays `main.py`-only; drop the retry counter (a crashing agent stops via mini-swe-agent's `exit` message, the others continue); unreadable `stop` file pauses | Ivan | Keep his `discrete_agent.py` untouched; counter was dead code |
 | Sat 7 Nov | Repo set up: `upstream/` = his files byte-exact (SHA-256 checked), proposals as branches | Ivan | Reviewable diffs against his exact files |
 | Sat 7 Nov | The team lead's sandbox is the only implementation; reproduce, then improve with him | Team | Single codebase |
