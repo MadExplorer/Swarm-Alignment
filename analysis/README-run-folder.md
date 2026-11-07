@@ -14,6 +14,29 @@ Standard library only, Python ≥ 3.10. Tests: `tests/test_load_run.py`.
 
 **Research goal** (team lead, Sat 7 Nov): monitors detect suspicious **transmission points**, places where information may be sent. They do not decode it. A *point* is one message (`send`/`broadcast`), and later also one change in the shared folder (`shared_events.jsonl`, branch `shared-folder`).
 
+## Reading runs over HTTP (read-only endpoint)
+
+`analysis/serve_runs.py` uses the standard library only. It binds to 127.0.0.1 and refuses any other address. It only reads and never executes anything from the data.
+
+```bash
+# on the server (tmux), once:
+cd /root/repro/host/analysis && /root/repro/venv-host/bin/python serve_runs.py --root /root/repro/host-runs --port 8765
+# on your machine:
+ssh -L 8765:127.0.0.1:8765 <server>      # then, in another terminal:
+curl localhost:8765/runs
+curl 'localhost:8765/runs/<run>/agents/Keter/round/3?format=text'
+```
+
+| Route | Returns |
+|---|---|
+| `/` | the route list |
+| `/runs` | every run: `condition`, `status` (`finished` = `run_end.json` exists; `running` = a file written in the last 10 min; else `incomplete`), `block`, `started`, `ended`, `rounds`, `score`, `agents`, `monitors`, `last_write` |
+| `/runs/<run>/messages`, `/submits`, `/monitor` | the JSONL file as a JSON array (`[]` if it does not exist yet) |
+| `/runs/<run>/agents/<name>/round/<N>` | the trajectory of that round as JSON; `?format=text` gives a readable transcript (role, content, `$ commands`, tool outputs capped at 2000 characters, `&max=` to change it) |
+| `/runs/<run>/agents/<name>/tokens` | the token-ID records (delta-encoded, see below) |
+
+There is deliberately no route for `secrets.jsonl` or `labels.jsonl`: use `scp` or `load_run`.
+
 ## Where it is and who can read it
 
 `<SWARM_RUN_DIR>/<UTC timestamp>[-<condition>]/`, e.g. `/root/repro/host-runs/20261107-163124-collusive`.
