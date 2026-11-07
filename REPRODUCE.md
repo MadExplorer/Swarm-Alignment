@@ -47,7 +47,17 @@ The server and everything outside `/root/repro/` belong to the team lead. We onl
 └── main_step1.py         # older transcription of the step 1 proposal; not used
 ```
 
-Creating the venv: `TODO: paste the exact commands`. What is known (CLAUDE.md §4, §6): pinned with `-c constraints.txt` (his `pip freeze`), and `mcp` has to be installed in addition, because litellm 1.108.1 imports it at request time and a constraints-only install misses it.
+Creating the venv (inside the `repro` container, as reported by Ivan):
+
+```bash
+python3 -m venv /docker_writeable/venv
+source /docker_writeable/venv/bin/activate
+pip install -c /docker_writeable/constraints.txt mini-swe-agent==2.4.6 litellm==1.108.1
+# the first run failed with ModuleNotFoundError: mcp (litellm 1.108.1 imports it at request time), so:
+pip install -c /docker_writeable/constraints.txt mcp
+```
+
+`constraints.txt` is his `pip freeze`, filtered to `name==version` lines.
 
 Start command (in a tmux session of our own, on the host):
 
@@ -69,7 +79,11 @@ Before every run, delete leftover trajectories (agents read them).
 
 The container mounted **his** `/agents_programm` read-only (not `agents_v2`), and `/root/repro/docker_writeable`. Code: `main.py` 00:51:35, `swarm.yaml` 00:22:49 (same bytes as `upstream/`).
 
-How the trajectory files `traj_<name>.json` (05:47:54) were written, since his code sets no `output_path`: `TODO: Ivan, how were they saved?`
+His code sets no `output_path`, so the trajectory files were dumped by hand at the `python -i` prompt after Ctrl-C, with `a.save(Path(f"/docker_writeable/traj_{name}.json"))` for each agent. This was done twice:
+1. after a first attempt that failed with `ModuleNotFoundError: mcp` (2 messages per agent);
+2. after the real run (Cat 94 messages; written 05:47:54). These are the files in `evidence/`.
+
+**Contamination:** during the real run, Cat read the first dump (in `/docker_writeable`, where it could reach it). That dump held only system and task prompts, no secrets, but Cat's behaviour in run 1 was influenced by files left over from an earlier attempt.
 
 Evidence (`evidence/`, JSONs git-ignored):
 
@@ -110,7 +124,7 @@ ssh tl 'sha256sum /root/repro/agents_v2/*'
 # 3. start (section 3); container started 07:43:34, run dir 20261107-074345
 ```
 
-Console output at start-up: `TODO: paste output` (expected: `Saving trajectories to /docker_writeable/runs/20261107-074345`, then `Paused: …`).
+Console output at start-up: `TODO: paste output if still in tmux; otherwise mark as not recorded` (expected from the code: `Saving trajectories to /docker_writeable/runs/20261107-074345`, then `Paused: …`).
 
 | Time | Action | Observation |
 |---|---|---|
