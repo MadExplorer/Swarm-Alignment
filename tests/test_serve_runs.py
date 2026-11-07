@@ -167,3 +167,111 @@ def test_main_module_has_no_shell_or_exec():
     attrs = {n.func.attr for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
     assert not bare & {"eval", "exec", "compile", "__import__"}
     assert not attrs & {"system", "popen", "Popen", "spawnv", "execv", "execvp", "startfile"}
+
+
+# ---- tokens: full=1 / decode=1 ------------------------------------------------------------------------------
+# Shaped like the real records: record 2 shares less than record 1's whole prompt (the generation prompt is
+# re-rendered), record 3 starts round 2 (new context; only the shared system prompt prefix is kept).
+TOKREC = [
+    {"record": 1, "round": 1, "prompt_len": 4, "prefix_len": 0, "prompt_suffix": [2, 105, 10, 11], "completion": [50, 106]},
+    {"record": 2, "round": 1, "prompt_len": 6, "prefix_len": 3, "prompt_suffix": [12, 13, 14], "completion": [51]},
+    {"record": 3, "round": 2, "prompt_len": 3, "prefix_len": 2, "prompt_suffix": [99], "completion": []},
+]
+FULL = {1: [2, 105, 10, 11], 2: [2, 105, 10, 12, 13, 14], 3: [2, 105, 99]}
+
+
+@pytest.fixture()
+def fake_vllm():
+    """A stand-in for vLLM's POST /detokenize: returns '<id>' per token, so special tokens are 'visible'."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    calls = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            calls.append((self.path, body))
+            out = json.dumps({"prompt": "".join(f"<{i}>" for i in body["tokens"])}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}", calls
+    srv.shutdown()
+    srv.server_close()
+
+
+def _serve(root, vllm_url):
+    srv = serve_runs.make_server(root, "127.0.0.1", 0, vllm_url)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+@pytest.fixture()
+def tok_server(tree, fake_vllm):
+    (tree / RUN / "Cat.tokens.jsonl").write_text(jl(TOKREC))
+    srv = _serve(tree, fake_vllm[0])
+    yield srv.server_address[1], fake_vllm[1]
+    srv.shutdown()
+    srv.server_close()
+
+
+def test_full_prompts_rule_and_mismatch():
+    got = serve_runs.full_prompts(TOKREC)
+    assert {r["record"]: r["prompt_token_ids"] for r in got} == FULL
+    bad = serve_runs.full_prompts([dict(TOKREC[0], prompt_len=5)])
+    assert bad[0]["prompt_token_ids"] is None and "reconstruction_error" in bad[0]
+
+
+def test_tokens_full(tok_server):
+    port, calls = tok_server
+    s, recs = getj(port, f"/runs/{RUN}/agents/Cat/tokens?full=1")
+    assert s == 200 and {r["record"]: r["prompt_token_ids"] for r in recs} == FULL
+    assert recs[1]["prompt_suffix"] == [12, 13, 14] and "prompt_text" not in recs[0]
+    assert calls == []                                                     # full=1 alone never calls vLLM
+    assert getj(port, f"/runs/{RUN}/agents/Cat/tokens")[1] == TOKREC         # unchanged without options
+
+
+def test_tokens_decode_and_filters(tok_server):
+    port, calls = tok_server
+    s, recs = getj(port, f"/runs/{RUN}/agents/Cat/tokens?decode=1&record=2")
+    assert s == 200 and len(recs) == 1
+    r = recs[0]
+    assert r["prompt_text"] == "<2><105><10><12><13><14>" and r["completion_text"] == "<51>"
+    assert "prompt_token_ids" not in r                                       # decode without full: texts only
+    assert calls[0][0] == "/detokenize" and calls[0][1] == {"model": "Cat", "tokens": FULL[2]}
+    n = len(calls)
+    getj(port, f"/runs/{RUN}/agents/Cat/tokens?decode=1&record=2")
+    assert len(calls) == n                                                  # cached
+    s, recs = getj(port, f"/runs/{RUN}/agents/Cat/tokens?decode=1&full=1&round=2")
+    assert [r["record"] for r in recs] == [3] and recs[0]["prompt_token_ids"] == FULL[3]
+    assert recs[0]["prompt_text"] == "<2><105><99>" and recs[0]["completion_text"] == ""
+    assert [r["record"] for r in getj(port, f"/runs/{RUN}/agents/Cat/tokens?round=1")[1]] == [1, 2]
+    assert getj(port, f"/runs/{RUN}/agents/Cat/tokens?record=x")[0] == 404
+
+
+def test_decode_errors(tree):
+    (tree / RUN / "Cat.tokens.jsonl").write_text(jl(TOKREC))
+    off = _serve(tree, None)                                                 # decoding switched off
+    assert getj(off.server_address[1], f"/runs/{RUN}/agents/Cat/tokens?decode=1")[0] == 503
+    assert getj(off.server_address[1], f"/runs/{RUN}/agents/Cat/tokens?full=1")[0] == 200
+    off.shutdown(), off.server_close()
+    import socket
+    with socket.socket() as sk:                                            # a free port where nothing listens
+        sk.bind(("127.0.0.1", 0))
+        dead = sk.getsockname()[1]
+    down = _serve(tree, f"http://127.0.0.1:{dead}")
+    s, body = getj(down.server_address[1], f"/runs/{RUN}/agents/Cat/tokens?decode=1")
+    assert s == 502 and "detokenize failed" in body["error"]
+    down.shutdown(), down.server_close()
+
+
+@pytest.mark.parametrize("url", ["http://10.0.0.5:8000", "http://example.com:8000", "https://127.0.0.1:8000", "file:///etc"])
+def test_vllm_url_must_be_loopback_http(tree, url):
+    with pytest.raises(SystemExit):
+        serve_runs.make_server(tree, "127.0.0.1", 0, url)
