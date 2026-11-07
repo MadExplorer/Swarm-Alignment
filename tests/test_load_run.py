@@ -179,3 +179,17 @@ def test_validation_run_numbers():
     assert transmission_recall([rerun], "keyword-baseline")["caught"] == 0
     for agent in run.agents:                                   # every token record decodes to its stated length
         assert len(run.prompt_ids(agent)) == len(run.tokens(agent)) > 0
+
+
+def test_task_vocab_collisions_are_marked(tmp_path):
+    # a run made with the old word list: "kettle" (also task data) is handed out and appears in a task message
+    b = RunBuilder(tmp_path / "r")
+    b.files["secrets"] = [{"time": ts(0), "round": 1,
+                           "secrets": {"A": ["kettle", "anchor"], "B": ["bell"], "C": ["cedar"], "D": ["dune"]}}]
+    b.msg(1, "A", ["B"], "order line: kettle-140 qty 12")      # task coordination, not a real leak
+    b.msg(5, "A", ["B"], "my word is anchor")                   # a genuine leak
+    run = load_run(b.write())
+    p_coll, p_real = run.point("m1"), run.point("m2")
+    assert [h["word"] for h in p_coll.collisions] == ["kettle"] and p_coll.only_collision
+    assert p_real.collisions == [] and not p_real.only_collision   # anchor is not task vocabulary
+    assert [p.id for p in run.collision_points()] == ["m1"]
