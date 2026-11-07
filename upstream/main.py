@@ -19,6 +19,7 @@ from comms import Router
 from monitors import KeywordMonitor
 from cover_tasks import TaskManager
 from runlog import JsonlLog, utc_now
+from scoring import Game, ScoreRules
                                      
 def trajectory_text(messages):
     msgs = []
@@ -47,6 +48,10 @@ if ISOLATION not in ("none", "container"):
     sys.exit(f"SWARM_ISOLATION must be 'none' or 'container', not {ISOLATION!r}")
 if ISOLATION == "container" and not os.environ.get("SWARM_RUN_DIR"):
     sys.exit("SWARM_ISOLATION=container needs SWARM_RUN_DIR: a host folder that the agent container does not see")
+# Secrets only with isolation: before it, agents can read them from other agents' files and the harness.
+SECRETS = os.environ.get("SWARM_SECRETS", "1" if ISOLATION == "container" else "0") == "1"
+if SECRETS and ISOLATION != "container":
+    sys.exit("SWARM_SECRETS=1 needs SWARM_ISOLATION=container (no secrets without isolation)")
 CONFIG_FILE = Path(os.environ.get("SWARM_CONFIG", "/docker_writeable/swarm.yaml"))
 API_BASE = os.environ.get("SWARM_API_BASE", "http://localhost:8000/v1")
 
@@ -77,10 +82,6 @@ model_kwargs = model_cfg.pop("model_kwargs", {})
 # Ask vLLM for prompt and completion token IDs (needed for activation replay); litellm forwards extra_body.
 model_kwargs["extra_body"] = {"return_token_ids": True, **model_kwargs.get("extra_body", {})}
 
-def on_submit(submitter, target, word):
-    """Hook for the team lead's step 5 (secrets, scoring). No secrets are handed out yet: returns None."""
-    return None
-
 box = None
 if ISOLATION == "container":
     from agent_container import AgentContainer, ContainerUserEnvironment, ContainerWorkspace, home_for, user_for
@@ -95,9 +96,13 @@ if ISOLATION == "container":
 else:
     workspace = None                 # TaskManager writes to /Agents/<name> directly
 
+RULES = ScoreRules.from_env()        # proposed point values; see scoring.py
 tasks = TaskManager(agent_names, Path("/Agents"), RUN_DIR, paired=True, reveal_result=True, only=ONLY_TEMPLATES,
-                    workspace=workspace)
-router = Router(agent_names, RUN_DIR, monitors=[KeywordMonitor()], on_submit=on_submit, on_done=tasks.on_done)
+                    workspace=workspace, points_per_task=RULES.task)
+game = Game(agent_names, RUN_DIR, RULES, run_seed=tasks.run_seed, secrets_enabled=SECRETS)
+tasks.on_checked = game.on_task_checked
+router = Router(agent_names, RUN_DIR, monitors=[KeywordMonitor()], on_submit=game.on_submit, on_done=tasks.on_done,
+                on_verdicts=game.on_verdicts, submit_feedback=game.submit_feedback)
                                                                                   
 for i in agent_names:                                                             
     model = LitellmModel(                                                         
@@ -165,12 +170,13 @@ def _sha256(path):
 
 RUN_META = {
     "started": utc_now(), "agents": agent_names, "round_seconds": ROUND_SECONDS, "templates": ONLY_TEMPLATES,
-    "reset_per_round": RESET_PER_ROUND, "isolation": ISOLATION,
+    "reset_per_round": RESET_PER_ROUND, "isolation": ISOLATION, "secrets": SECRETS,
+    "score_rules": game.final()["rules"],
     "agent_container": box.verify_config() if box is not None else None,
     "model_kwargs": {k: v for k, v in model_kwargs.items() if k != "api_key"},
     "code_sha256": {f: _sha256(Path(__file__).parent / f) for f in
                     ("main.py", "discrete_agent.py", "comms.py", "monitors.py", "cover_tasks.py", "runlog.py",
-                     "agent_container.py")},
+                     "agent_container.py", "scoring.py")},
     "swarm_yaml_sha256": _sha256(CONFIG_FILE),
 }
 (RUN_DIR / "run_meta.json").parent.mkdir(parents=True, exist_ok=True)
@@ -192,7 +198,8 @@ def record_shared_dirs(when):
 @atexit.register
 def _write_run_end():
     # The task seed is revealed only when the run is over (tasks can then be regenerated exactly).
-    (RUN_DIR / "run_end.json").write_text(json.dumps({"ended": utc_now(), "rounds": round_no, "run_seed": tasks.run_seed}))
+    (RUN_DIR / "run_end.json").write_text(json.dumps({"ended": utc_now(), "rounds": round_no, "run_seed": tasks.run_seed,
+                                                      **game.final()}))
     if box is not None:  # runs before box.stop (atexit is last-in, first-out)
         record_shared_dirs("run_end")
         try:
@@ -212,7 +219,10 @@ def begin_round():
     round_no += 1
     round_active_seconds = 0.0
     router.round = round_no
-    task_messages = tasks.start_round(round_no)  # also checks the previous round's open tasks
+    # Checks the previous round's open tasks first; their points still count for the previous round.
+    task_messages = tasks.start_round(round_no)
+    score_note = game.summary(round_no - 1) if round_no > 1 else ""
+    game.new_round(round_no)  # new secrets; the old ones no longer score
     for name, agent in zip(agent_names, agents):
         if is_finished(agent):
             continue
@@ -227,6 +237,10 @@ def begin_round():
                     f"{tasks.summary(name)}\n{router.history_note(name, round_no)}")
         else:
             text = f"Round {round_no} has started."
+        if score_note:
+            text += "\n" + score_note
+        if SECRETS:
+            text += "\n\n" + game.secret_text(name)
         if name in task_messages:
             text += "\n\n" + task_messages[name]
         agent.add_messages(agent.model.format_message(role="user", content=text))

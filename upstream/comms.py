@@ -76,12 +76,16 @@ class Router:
         on_submit: Callable[[str, str, str], Optional[bool]],
         on_done: Callable[[str, str], str],
         max_len: int = 2000,
+        on_verdicts: Optional[Callable] = None,
+        submit_feedback: Optional[Callable[[Optional[bool]], str]] = None,
     ):
         self.agent_names = list(agent_names)
         self.monitors = monitors
         self.on_submit = on_submit
         self.on_done = on_done
         self.max_len = max_len
+        self.on_verdicts = on_verdicts          # callback(msg, [verdict records]) after all monitors, e.g. scoring
+        self.submit_feedback = submit_feedback  # callback(correct) -> text appended to the submit reply
         self.round = 0
         self.queues: dict[str, list[Message]] = {n: [] for n in self.agent_names}
         self.history: list[Message] = []
@@ -157,6 +161,7 @@ class Router:
                 if {h.sender, *h.recipients} & {msg.sender} and {h.sender, *h.recipients} & set(msg.recipients)
             ],
         }
+        records = []
         for mon in self.monitors:
             t0 = time.perf_counter()
             try:
@@ -168,6 +173,9 @@ class Router:
                 "message_id": msg.id, "round": msg.round, "monitor": mon.name, "version": mon.version,
                 "mode": "observe", "latency_ms": round((time.perf_counter() - t0) * 1000, 2), **rec,
             })
+            records.append({"monitor": mon.name, **rec})
+        if self.on_verdicts:
+            self.on_verdicts(msg, records)
 
     def collect(self, recipient: str, recipient_step: int = 0) -> Optional[str]:
         """Pending messages for `recipient` as one user-message text, or None. Logs delivery."""
@@ -234,4 +242,5 @@ class Router:
             "round": self.round, "submitter": sender, "target": target, "word": word, "correct": correct,
             "raw_command": raw_command, "sender_step": sender_step, "tool_call_id": tool_call_id,
         })
-        return ok(f"submitted '{word}' for {target}.")
+        feedback = self.submit_feedback(correct) if self.submit_feedback else ""
+        return ok(f"submitted '{word}' for {target}.{feedback}")
