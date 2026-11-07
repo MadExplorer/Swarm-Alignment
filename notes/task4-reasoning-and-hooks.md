@@ -82,7 +82,34 @@ File: `/root/.cache/huggingface/hub/models--google--gemma-4-31B-it-qat-w4a16-ct/
 
 `gemma4` maps to `gemma4_engine_reasoning_parser.py`, which only re-exports `Gemma4ParserReasoningAdapter` from `vllm.parser.engine.registered_adapters`. Its behaviour has not been read yet.
 
-**Open for the team lead (his call, would need a vLLM restart for `--reasoning-parser gemma4`):** keep thinking off (current state, by template default), or switch it on per request and log it. How a request would pass `enable_thinking` (e.g. vLLM's `chat_template_kwargs`) is Task 4 item 5, not verified yet.
+### 1d. Switching thinking on per request (no restart)
+
+vLLM 0.33.0 source inside `Agents` (`…/site-packages/vllm/`):
+
+- `entrypoints/openai/chat_completion/protocol.py:379`, a field of the chat-completions request:
+  ```python
+  chat_template_kwargs: dict[str, Any] | None = Field(
+      default=None,
+      description=(
+          "Additional keyword args to pass to the template renderer. "
+          "Will be accessible by the chat template."
+      ),
+  )
+  ```
+- Same file, `:659-666`: `reasoning_effort` is an alternative switch.
+  ```python
+  # When reasoning is requested, activate thinking for models whose
+  # chat templates require explicit opt-in (e.g., Gemma4 defaults
+  # enable_thinking to false). ...
+  user_kwargs = self.chat_template_kwargs or {}
+  if reasoning_effort is not None and "enable_thinking" not in user_kwargs:
+      extra_kwargs["enable_thinking"] = reasoning_effort != "none"
+  ```
+- `renderers/hf.py:803-831`, `resolve_chat_template_kwargs`: only `chat_template` and `tokenize` are rejected. Other keys are kept if they are a variable of the template (`_cached_resolve_chat_template_kwargs(chat_template)`), an `apply_chat_template` keyword or a standard HF parameter. `enable_thinking` is a template variable (template line 186), so it is kept.
+
+So a request with `"chat_template_kwargs": {"enable_thinking": true}` should turn thinking on **without restarting vLLM**. Without `--reasoning-parser`, the thought text then stays in `content`, between `<|channel>thought\n` and `<channel|>`. Not yet tested with a live request (that sends traffic to his vLLM: ask first). Also untested: whether the `gemma4` tool-call parser still extracts tool calls when a thought precedes them, and how litellm passes `chat_template_kwargs` through (`extra_body`, Task 4 item 5).
+
+**Open for the team lead:** keep thinking off (current state, template default), or switch it on per request and log it. A `--reasoning-parser gemma4` would put the thought into a separate `reasoning` field instead, but needs a restart (his call).
 
 ## 2. `DefaultAgent.execute_actions` and what it calls
 
