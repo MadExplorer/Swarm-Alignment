@@ -1,4 +1,7 @@
-evidence/*.json
+evidence/
 __pycache__/
 .venv/
 venv/
+# local working files (not part of the repo history; force-add if you want them tracked)
+kickoff-prompt.md
+proposed-step1-main.py
