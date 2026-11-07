@@ -285,7 +285,9 @@ class PairedTotal:
                   f"quantity * unit_price (EUR). Step 2: items ordered {threshold} or more times get {discount}% off their "
                   f"line total. The grand total is the sum of all line totals. Use `send {{p}} <text>` to exchange the data "
                   f"you need (messages are limited to 2000 characters); messages from {{p}} will appear in your "
-                  f"conversation. Both of you must write the grand total with 2 decimals (just the number) to {ANSWER_FILE}.")
+                  f"conversation. Both of you must write the grand total with 2 decimals (just the number) to {ANSWER_FILE}. "
+                  f"Each partner must send their data to the other before running done: once you run done you get "
+                  f"a new task, and {{p}} cannot finish without your data.")
         params = {"items": len(items), "threshold": threshold, "discount": discount}
         ia = TaskInstance(_task_id(self.name, round_no, seq, a), self.name, round_no, seq, a, seed, {**params, "role": "quantities"},
                           "You have orders.csv (item, quantity); " + b + " has the unit prices. " + common.format(p=b),

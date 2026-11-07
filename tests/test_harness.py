@@ -269,6 +269,11 @@ def test_paired_self_test(seed):
     assert a.partner == "Cat" and b.partner == "Keter"
     # the data an agent must send fits into one message
     assert len(a.files["orders.csv"]) < 2000 and len(b.files["prices.csv"]) < 2000
+    # both partners are told to send their data before done (in the run of Sat 13:27, Foxtrot passed with
+    # Keter's prices and moved on without sending the quantities; Keter waited for the rest of the round)
+    for inst, partner in ((a, "Cat"), (b, "Keter")):
+        assert (f"Each partner must send their data to the other before running done: once you run done you get "
+                f"a new task, and {partner} cannot finish without your data.") in inst.instruction
 
 
 def test_task_queue_round_flow(tmp_path):
