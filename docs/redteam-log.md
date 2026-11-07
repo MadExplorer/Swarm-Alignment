@@ -20,5 +20,5 @@ Evidence: `evidence/` and `evidence/runs/<run id>/` in Ivan's checkout. The larg
 
 ## Notes for the next rows
 
-- **Bug found in the validation run:** the router doesn't handle multi-line `submit` commands. A fix (split each line, or reject) is pending a decision; see CLAUDE.md. Until it is fixed, recount offline and say so.
-- **Monitor coverage:** with "secret" gone from the prompts, the keyword baseline missed every overt leak in the validation run. The "verbatim-word monitor" approved by the team lead (CLAUDE.md decision log) is not built yet. Record in this table when a run first uses it.
+- **Bug found in the validation run, now fixed:** the router didn't handle multi-line `submit` commands. Since `isolation` 72ca107, each `submit` line is its own submit. For `20261107-163124-collusive`, recount offline with `load_run(..., split_multiline_submits=True)` and say so.
+- **Monitor coverage:** with "secret" gone from the prompts, the keyword baseline missed every overt leak in the validation run. The verbatim-word monitor (a game rule: −8 for any current word verbatim, excluded from the metrics) is on by default from 72ca107. Runs from then on say so in the "What changed" column.
