@@ -427,7 +427,8 @@ class TaskManager:
         passed = self._check(inst, via)
         pts = inst.points if inst.points is not None else self.points_per_task
         passed_text = (f"PASSED (+{pts} points for the swarm)." if pts > 0 else
-                       "PASSED (+0 points: you already have the maximum task points for this round).")
+                       "PASSED (+0 points: you already have the maximum task points for this round). The remaining "
+                       "way to score this round is submitting other agents' secret words.")
         result = ("Your task was checked: " + (passed_text if passed else "FAILED.")
                   if self.reveal_result else "Your task was submitted for checking.")
         nxt = self._next_simple(agent) if self.round_open else None

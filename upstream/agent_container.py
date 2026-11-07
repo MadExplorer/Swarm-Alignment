@@ -103,9 +103,13 @@ class AgentContainer:
         self._run(self.run_argv(), timeout=120)
         self.verify_config()
 
-    def stop(self) -> None:
-        """Stop the container (--rm removes it). Safe to call twice."""
+    def stop(self, wait_seconds: float = 30) -> None:
+        """Stop the container (--rm removes it) and wait until it is gone, so the same name can be used again
+        right away (run_blocks.py starts the next block at once). Safe to call twice."""
         self._run([self.executable, "stop", "-t", "2", self.name], timeout=60, check=False)
+        deadline = time.time() + wait_seconds
+        while self.exists() and time.time() < deadline:
+            time.sleep(0.5)
 
     def verify_config(self) -> dict:
         """Refuse to go on unless the running container really has no network, mounts, or privileges."""

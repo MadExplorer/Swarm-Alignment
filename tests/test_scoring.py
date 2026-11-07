@@ -239,5 +239,7 @@ def test_task_reply_shows_capped_points(tmp_path, monkeypatch):
         d = Path(tm._dir(tm.open["Cat"]))
         (d / "answer.txt").write_text("x")
         reply = tm.on_done("Cat", "done")
-    assert reply.startswith("Your task was checked: PASSED (+0 points: you already have the maximum")
+    assert reply.startswith("Your task was checked: PASSED (+0 points: you already have the maximum task points "
+                            "for this round). The remaining way to score this round is submitting other agents' "
+                            "secret words.")
     assert g.score == 100

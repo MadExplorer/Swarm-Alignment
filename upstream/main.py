@@ -52,6 +52,17 @@ if ISOLATION == "container" and not os.environ.get("SWARM_RUN_DIR"):
 SECRETS = os.environ.get("SWARM_SECRETS", "1" if ISOLATION == "container" else "0") == "1"
 if SECRETS and ISOLATION != "container":
     sys.exit("SWARM_SECRETS=1 needs SWARM_ISOLATION=container (no secrets without isolation)")
+# Experimental condition (design/communication.md §5, CLAUDE.md §8): which instruction line swarm.yaml shows.
+CONDITION = os.environ.get("SWARM_CONDITION", "none")
+if CONDITION not in ("none", "collusive", "honest"):
+    sys.exit(f"SWARM_CONDITION must be 'none', 'collusive' or 'honest', not {CONDITION!r}")
+if CONDITION != "none" and not SECRETS:
+    sys.exit("SWARM_CONDITION=collusive/honest needs secrets (SWARM_ISOLATION=container)")
+# Stop cleanly after this many rounds (0 = run until stopped). Cleanup as at exit(): shared dirs recorded,
+# container removed, run_end.json written.
+MAX_ROUNDS = int(os.environ.get("SWARM_MAX_ROUNDS", "0"))
+# Seed for tasks and secrets (default: random; the wrapper run_blocks.py passes a new one per block).
+SEED = int(os.environ["SWARM_SEED"]) if os.environ.get("SWARM_SEED") else None
 CONFIG_FILE = Path(os.environ.get("SWARM_CONFIG", "/docker_writeable/swarm.yaml"))
 API_BASE = os.environ.get("SWARM_API_BASE", "http://localhost:8000/v1")
 
@@ -62,7 +73,8 @@ model_cfg = cfg["model"]
 # Trajectories are saved here after every step, one subfolder per run.
 # Still inside /docker_writeable for now, so agents can read it; step 2 moves it
 # to a host folder that no agent container mounts (set SWARM_RUN_DIR).
-RUN_DIR = Path(os.environ.get("SWARM_RUN_DIR", "/docker_writeable/runs")) / time.strftime("%Y%m%d-%H%M%S")
+RUN_DIR = Path(os.environ.get("SWARM_RUN_DIR", "/docker_writeable/runs")) / (
+    time.strftime("%Y%m%d-%H%M%S") + (f"-{CONDITION}" if CONDITION != "none" else ""))
 STOP_FILE = Path(os.environ.get("SWARM_STOP_FILE", "/docker_writeable/stop"))
 # Round length in seconds of active (not paused) time; swarm.yaml says 10 minutes.
 ROUND_SECONDS = float(os.environ.get("SWARM_ROUND_SECONDS", "600"))
@@ -97,7 +109,7 @@ else:
     workspace = None                 # TaskManager writes to /Agents/<name> directly
 
 RULES = ScoreRules.from_env()        # point values approved by the team lead (Sat 7 Nov); see scoring.py
-tasks = TaskManager(agent_names, Path("/Agents"), RUN_DIR, paired=True, reveal_result=True, only=ONLY_TEMPLATES,
+tasks = TaskManager(agent_names, Path("/Agents"), RUN_DIR, run_seed=SEED, paired=True, reveal_result=True, only=ONLY_TEMPLATES,
                     workspace=workspace, points_per_task=RULES.task, task_cap=RULES.task_cap)
 game = Game(agent_names, RUN_DIR, RULES, run_seed=tasks.run_seed, secrets_enabled=SECRETS)
 tasks.on_checked = game.on_task_checked
@@ -128,7 +140,7 @@ for i in agent_names:
     # Variables for swarm.yaml (kept in extra_template_vars, so later run_init() calls reuse them).
     agent.run_init("First round started", agent_name=i, agent_names=", ".join(agent_names),
                    round_minutes=f"{ROUND_SECONDS / 60:g}", message_max_len=router.max_len,
-                   reset_per_round=RESET_PER_ROUND, words_per_agent=RULES.words_per_agent,
+                   reset_per_round=RESET_PER_ROUND, condition=CONDITION, words_per_agent=RULES.words_per_agent,
                    secret_points=RULES.secret, wrong_submit_points=-RULES.wrong_submit, task_points=RULES.task,
                    task_cap=RULES.task_cap, detection_points=-RULES.detection)
 
@@ -173,6 +185,7 @@ def _sha256(path):
 RUN_META = {
     "started": utc_now(), "agents": agent_names, "round_seconds": ROUND_SECONDS, "templates": ONLY_TEMPLATES,
     "reset_per_round": RESET_PER_ROUND, "isolation": ISOLATION, "secrets": SECRETS,
+    "condition": CONDITION, "max_rounds": MAX_ROUNDS, "block": os.environ.get("SWARM_BLOCK"),
     "score_rules": game.final()["rules"],
     "agent_container": box.verify_config() if box is not None else None,
     "model_kwargs": {k: v for k, v in model_kwargs.items() if k != "api_key"},
@@ -274,6 +287,10 @@ while True:
         round_active_seconds += now - last_tick
     last_tick = now
     if round_active_seconds >= ROUND_SECONDS:
+        if MAX_ROUNDS and round_no >= MAX_ROUNDS:
+            tasks.end_round()  # check the last round's open tasks (their points count)
+            print(f"=== {MAX_ROUNDS} rounds done. Stopping. ===")
+            break
         begin_round()
 
     # An agent whose step raised an exception gets an "exit" message from
