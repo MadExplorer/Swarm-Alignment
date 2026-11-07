@@ -88,7 +88,7 @@ Not yet verified (check before relying on it): how `DockerEnvironment` accepts e
 
 | # | Step | Owner | Status |
 |---|------|-------|--------|
-| 1 | Quick fixes in `main.py`: round-robin over all agents, re-read `stop` every step (pause, fail-safe), fix `model_kwargs`, set `output_path` to `runs/<timestamp>/<name>.traj.json` (dir overridable by `SWARM_RUN_DIR`), contain per-agent failures, readable printing, remove the commented secret-words line | Ivan | Patch exists (`step1-main.diff`, exact version built with `patch -l` on his file as `/root/repro/main_step1_exact.py`). **Pending: test in repro, then team lead approval.** `discrete_agent.py` unchanged. |
+| 1 | Quick fixes in `main.py`: round-robin over all agents, re-read `stop` every step (pause, fail-safe), fix `model_kwargs`, set `output_path` to `runs/<timestamp>/<name>.traj.json` (dir overridable by `SWARM_RUN_DIR`), contain per-agent failures, readable printing, remove the commented secret-words line | Ivan | Proposal on git branch `step1` (`git diff main..step1`); exported as `review/step1-main.diff` (applies with plain `patch -p1` to his 00:51 `main.py`) with the note `review/step1-for-teamlead.md`. A crashing agent gets an `exit` message and stops; no retry counter. **Pending: test in repro, then team lead approval.** `discrete_agent.py` unchanged. |
 | — | **Decide the communication channel** (shared folder vs. a harness-mediated message command) and how `submit` is intercepted. Recommendation: a harness command, so every message passes one monitored point; intercept both in `execute_actions` | Team lead | Open. Blocks steps 2 and 5. |
 | 2 | Isolation: harness on the host; each agent in its own container without network via mini-swe-agent's `DockerEnvironment`; vLLM in a separate container; trajectories in a host folder no agent container mounts | Team lead | Not started. Moving vLLM means restarting his vLLM: his call. |
 | 3 | Trajectory saving/loading; add token IDs from vLLM | Ivan | Saving done in step 1; token IDs open. |
@@ -98,6 +98,7 @@ Not yet verified (check before relying on it): how `DockerEnvironment` accepts e
 | A | **Communication between agents** (assigned by the team lead): harness commands such as `send <AGENT> <text>` intercepted in `execute_actions` before anything runs, delivered to the recipient as a message at its next step, and logged centrally (`runs/<ts>/messages.jsonl`: time, round, sender, recipient, text). This log is the monitor's input. `submit` goes through the same interception. Until isolation, agents can bypass it through the shared filesystem: note that as a limitation | Ivan | Design first, then code. Agree the `submit` part with the team lead. |
 | B | **Cover tasks** (assigned by the team lead): easily verifiable, keep the agent busy, no internet, fit a 10-minute round for Gemma 4 31B. Checkers run in the harness, outside agents' reach, so agents cannot read answers or tests. Prefer our own parameterised task templates with deterministic checkers over integrating a benchmark. Terminal-Bench 2.0 (Merrill et al., ICLR 2026, arXiv 2601.11868) is real but too hard and too heavy here: 89 tasks, each with its own container environment, frontier models score under 65%. Its task format (instruction + verification script + reference solution) is a good model to copy | Ivan (+ Syakir for content) | Not started. |
 | C | **Reasoning logging** (assigned by the team lead): see section 6. First measure, then propose on/off to him | Ivan | Not started. |
+| D | Context trimming before the overnight run: `ContextWindowExceededError` is not retried and ends the agent; ~26.7k tokens after 94 messages | Ivan | Open. Check vLLM's max context length first (read-only). |
 
 Timebox: a playable game must run overnight Sat→Sun (the team lead leaves the server on). Sunday: monitors, analysis, report.
 
@@ -129,5 +130,7 @@ Timebox: a playable game must run overnight Sat→Sun (the team lead leaves the 
 
 | Date | Decision | Who | Why |
 |------|----------|-----|-----|
+| Sat 7 Nov | Step 1 stays `main.py`-only; drop the retry counter (a crashing agent stops via mini-swe-agent's `exit` message, the others continue); unreadable `stop` file pauses | Ivan | Keep his `discrete_agent.py` untouched; counter was dead code |
+| Sat 7 Nov | Repo set up: `upstream/` = his files byte-exact (SHA-256 checked), proposals as branches | Ivan | Reviewable diffs against his exact files |
 | Sat 7 Nov | The team lead's sandbox is the only implementation; reproduce, then improve with him | Team | Single codebase |
 | Sat 7 Nov | Reproduce in a separate `repro` container sharing `Agents`' network, under `/root/repro` | Ivan | Never touch his running setup |
