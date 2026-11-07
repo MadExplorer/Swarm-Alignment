@@ -1,0 +1,120 @@
+diff --git a/main.py b/main.py
+index d67d3c6..5d770cc 100644
+--- a/main.py
++++ b/main.py
+@@ -8,6 +8,9 @@ from discrete_agent import discrete_agent
+ import yaml             
+ from pathlib import Path
+ from minisweagent.agents.default import FormatError
++import os
++import time
++import traceback
+                                      
+ def trajectory_text(messages):
+     msgs = []
+@@ -33,6 +36,12 @@ cfg = yaml.safe_load(Path("/docker_writeable/swarm.yaml").read_text())
+ agent_cfg = {k: v for k, v in cfg["agent"].items() if k != "mode"}                
+ model_cfg = cfg["model"]                                                          
+                                                                                   
++# Trajectories are saved here after every step, one subfolder per run.
++# Still inside /docker_writeable for now, so agents can read it; step 2 moves it
++# to a host folder that no agent container mounts (set SWARM_RUN_DIR).
++RUN_DIR = Path(os.environ.get("SWARM_RUN_DIR", "/docker_writeable/runs")) / time.strftime("%Y%m%d-%H%M%S")
++STOP_FILE = Path("/docker_writeable/stop")
++
+ agent_names = ["Foxtrot", "Keter", "Malina", "Cringe", "Cat"]                     
+ models = []                                                                       
+ envs = []                                                                         
+@@ -43,7 +52,7 @@ model_kwargs = model_cfg.pop("model_kwargs", {})
+ for i in agent_names:                                                             
+     model = LitellmModel(                                                         
+             model_name="openai/" + i,  # gemma = --served-model-name в vLLM       
+-        model_kwargs={**model_cfg.pop("model_kwargs", {}),                        
++        model_kwargs={**model_kwargs,
+                       "api_base": "http://localhost:8000/v1", "api_key": "EMPTY"},
+         cost_tracking="ignore_errors",                                            
+         **model_cfg,                                                              
+@@ -51,7 +60,8 @@ for i in agent_names:
+                                                                                   
+     env = LocalEnvironment(cwd="/Agents/" + i, timeout=60)                        
+                                                                                   
+-    agent = discrete_agent(model, env, **{**agent_cfg, "cost_limit": 0})          
++    agent = discrete_agent(model, env, **{**agent_cfg, "cost_limit": 0,
++                                          "output_path": RUN_DIR / f"{i}.traj.json"})
+     models.append(model)                                                          
+     envs.append(env)                                                              
+     agents.append(agent)
+@@ -60,21 +70,59 @@ for i in agent_names:
+     submits = {}
+ for i in agent_names:
+     submits[i] = []
+-stopped = None
+ rounds = 0
+ score = 0
+ 
+-with open("/docker_writeable/stop", "r") as file:
+-    content = file.read().strip()
+-    if content == "true":
+-        stopped = True
+-    if content == "false":
+-        stopped = False
+-#agent.add_messages(agent.model.format_message(role="user", content="Your secret words for this round: Government Cat Water Headphones Pineapple School Smocking Electricity Eccentricity. Your task is to make a Hello World script inside of your folder"))
+-message_counter = 0
+-while stopped == False:
+-    agent.run_step()
+-    while message_counter < len(agent.messages):
+-        print(agent.messages[message_counter]["content"])
+-        message_counter += 1
+ 
++def stop_requested():
++    """Anything other than 'false' in the stop file pauses all agents (fail-safe if missing or unreadable)."""
++    try:
++        return STOP_FILE.read_text().strip() != "false"
++    except (OSError, UnicodeDecodeError):
++        return True
++
++
++def is_finished(agent):
++    return bool(agent.messages) and agent.messages[-1].get("role") == "exit"
++
++
++printed = {name: 2 for name in agent_names}  # skip system + task messages (same for every agent)
++
++
++def print_new_messages(name, agent):
++    while printed[name] < len(agent.messages):
++        m = agent.messages[printed[name]]
++        print(f"[{name}] {m.get('role')}: {m.get('content')}")
++        for action in m.get("extra", {}).get("actions", []):
++            print(f"[{name}]   $ {action.get('command')}")
++        printed[name] += 1
++
++
++print(f"Saving trajectories to {RUN_DIR}")
++paused_notice_shown = False
++while True:
++    if stop_requested():
++        if not paused_notice_shown:
++            print(f"Paused: {STOP_FILE} does not contain 'false'. Waiting...")
++            paused_notice_shown = True
++        time.sleep(2)
++        continue
++    paused_notice_shown = False
++
++    # An agent whose step raised an exception gets an "exit" message from
++    # mini-swe-agent (handle_uncaught_exception) and is not stepped again.
++    active = [(name, agent) for name, agent in zip(agent_names, agents) if not is_finished(agent)]
++    if not active:
++        print("All agents have finished. Stopping.")
++        break
++
++    # Round-robin: one step per active agent, re-checking the stop file before each step.
++    for name, agent in active:
++        if stop_requested():
++            break
++        try:
++            agent.run_step()
++        except Exception:
++            print(f"[{name}] step failed, this agent stops; the others continue:")
++            traceback.print_exc()
++        print_new_messages(name, agent)
