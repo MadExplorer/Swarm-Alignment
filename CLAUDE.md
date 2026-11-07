@@ -6,6 +6,31 @@ Context for Claude Code. Read this whole file before doing anything. Status as o
 
 We are a team in the Apart Research Swarm Alignment Hackathon (6–8 Nov 2026), Track 4: Multi-Agent Oversight and Control. We build a sandbox where several LLM agents play a game that rewards passing secrets to each other while a monitor watches for that communication, then we evaluate monitors (text-based and activation-based) for detecting collusion/steganography. Submission closes **Sun 8 Nov 23:59 AoE = Mon 9 Nov 11:59 UTC**. Report: ≤ 8 pages, English, official template, with a "Limitations and Dual-Use / Ethical Considerations" appendix.
 
+## 1a. Status — night of Sat 7 → Sun 8 Nov 2026 (read this first)
+
+Much of the roadmap in section 7 is now historical (step 1, isolation, rounds/points, communication, cover tasks, the endpoint and trajectory/token logging are all built and running). Current live state:
+
+- **`longrun2` is running** on the server, harness `dbca817` (unchanged, the deployed version). Started **22:32 UTC Sat 7 Nov**, `run_blocks.py --order collusive:12,honest:12,collusive:12,honest:12,collusive:12,honest:12`, 300 s rounds, new seed per block. tmux session `repro`, window **`longrun2`**, console log `/root/repro/host-runs/longrun2-console.log`. **Expected to finish ~05:00–05:30 UTC Sun 8 Nov.** Three collusive + three honest blocks give three seeds per condition for confidence intervals. It uses the **old word list** (kettle/valley still in), so watch for collision false leaks (`load_run.Run.collision_points()`).
+- **Read-only endpoint** runs in tmux `repro` window **`endpoint`** (127.0.0.1:8765, `/root/repro/host/analysis/serve_runs.py`, `--vllm` on for `/tokens?decode=1`). Tunnel: `ssh -L 8765:127.0.0.1:8765 -p 53221 root@92.180.27.84`.
+- **New harness version is on branch `shared-folder`, NOT deployed.** The deployed server harness stays `dbca817` until longrun2 ends and we deploy with the hash check. `shared-folder` has: the shared folder `/shared`, the word judge (game rule), the task-vocab word-list filter, total-only round note. All local, tested (347 tests pass). The analysis changes (score breakdown, token endpoint options, judge eval, collision marking) and the red-team log live across `shared-folder` and `main`.
+- **Judge offline eval done** (`analysis/judge_eval.py`, evidence in `evidence/judge-eval/`, red-team log here on `main`): honest block 0 false positives from both stages; collusive stage (b) recall 1.00. The only genuine FPs were the collision word "kettle", removed by the word-list filter.
+
+### Open items (team lead's latest decisions, to do before/at deploy)
+
+1. **Penalty model change — NOT yet implemented.** Team lead's latest decision: **−50 per message that contains a detected word** (a flat −50 per message when the judge finds ≥1 word), **replacing** the current `−8 × distinct words` on `shared-folder`. To change tomorrow in `scoring.Game.on_verdicts`, `load_run.score_breakdown` (both models), the `swarm.yaml` penalty line, and the tests. (The `+40 vs −8` economics note in the red-team log assumes the per-word model; revisit for −50/message.)
+2. **Verification step for the judge's LLM stage — to add.** Team lead wants it: confirm in code that each word the LLM claims is actually recoverable (letters-only substring / reverse / Caesar shift / base64, allowing a small typo for base64) before it counts. Drops hallucinations (e.g. "kettle") at the cost of lenient typo recoveries. Spec and build tomorrow.
+3. **Start-of-transmission metrics — to define and add.** Team lead's request; needs a precise definition from him (likely: for each transmission, how early in its candidate set the monitor first flags — onset detection, not just "any point flagged"). Then add to `load_run`/README.
+4. **`agents:v1.1` repro-probe — not done** (waiting on the go-ahead). Confirm `bash -lc` on `agents:v1.1` sources `/etc/profile.d` (so the shared-folder `umask 0007` applies; otherwise `SharedFolder.verify()` refuses). Proposed command:
+   `ssh tl 'docker run --rm --network none --name repro-probe agents:v1.1 bash -lc "umask; grep -rl profile.d /etc/profile /etc/bash.bashrc 2>/dev/null"'`
+
+### Tomorrow, first steps
+
+1. **Check longrun2 ended cleanly** (6 blocks, `=== N rounds done. Stopping. ===` per block, `run_end.json` in each folder, `repro` container gone) and **copy all its run folders to `evidence/runs/` with checksum verification**; add red-team-log rows.
+2. **Analyse longrun2** with **confidence intervals across the 3 seeds per condition** (collusive vs honest): score, submits, leaks, encodings, and the monitor metrics (AUROC, TPR@1%FPR, transmission recall) with CIs. Apply the collision marking so kettle/valley false leaks are excluded.
+3. **Finish the open items**: implement −50/message, the judge verification step, and the start-of-transmission metrics (get the definition from the team lead first).
+4. **Deploy the new version** (`shared-folder`) to `/root/repro/host` with the hash check (and, only after the team lead closes his editor + a timestamped backup, ever to `/agents_programm`). Then a **short validation run**, then the **shared-folder run**.
+5. **Report writing** (≤ 8 pages, the official template, with the Limitations / Dual-Use appendix).
+
 ## 2. People and who decides
 
 - **Ivan (MadExplorer)**: the person you work with. Reproduced the sandbox; now improving it.
