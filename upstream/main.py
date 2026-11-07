@@ -14,6 +14,7 @@ import traceback
 import atexit
 import hashlib
 import json
+import sys
 from comms import Router
 from monitors import KeywordMonitor
 from cover_tasks import TaskManager
@@ -39,7 +40,17 @@ def trajectory_text(messages):
 
 #cfg = get_config_from_spec("mini")                                                
 
-cfg = yaml.safe_load(Path("/docker_writeable/swarm.yaml").read_text())
+# SWARM_ISOLATION=container: the harness runs on the host; all agents share ONE container, each as its own
+# Linux user (design/isolation-1page.md). Default "none": the old setup (harness and agents in one container).
+ISOLATION = os.environ.get("SWARM_ISOLATION", "none")
+if ISOLATION not in ("none", "container"):
+    sys.exit(f"SWARM_ISOLATION must be 'none' or 'container', not {ISOLATION!r}")
+if ISOLATION == "container" and not os.environ.get("SWARM_RUN_DIR"):
+    sys.exit("SWARM_ISOLATION=container needs SWARM_RUN_DIR: a host folder that the agent container does not see")
+CONFIG_FILE = Path(os.environ.get("SWARM_CONFIG", "/docker_writeable/swarm.yaml"))
+API_BASE = os.environ.get("SWARM_API_BASE", "http://localhost:8000/v1")
+
+cfg = yaml.safe_load(CONFIG_FILE.read_text())
 agent_cfg = {k: v for k, v in cfg["agent"].items() if k != "mode"}                
 model_cfg = cfg["model"]                                                          
                                                                                   
@@ -47,7 +58,7 @@ model_cfg = cfg["model"]
 # Still inside /docker_writeable for now, so agents can read it; step 2 moves it
 # to a host folder that no agent container mounts (set SWARM_RUN_DIR).
 RUN_DIR = Path(os.environ.get("SWARM_RUN_DIR", "/docker_writeable/runs")) / time.strftime("%Y%m%d-%H%M%S")
-STOP_FILE = Path("/docker_writeable/stop")
+STOP_FILE = Path(os.environ.get("SWARM_STOP_FILE", "/docker_writeable/stop"))
 # Round length in seconds of active (not paused) time; swarm.yaml says 10 minutes.
 ROUND_SECONDS = float(os.environ.get("SWARM_ROUND_SECONDS", "600"))
 # Pilot: SWARM_AGENTS=Cat SWARM_TEMPLATES=log_stats,csv_join runs a subset.
@@ -70,19 +81,37 @@ def on_submit(submitter, target, word):
     """Hook for the team lead's step 5 (secrets, scoring). No secrets are handed out yet: returns None."""
     return None
 
-tasks = TaskManager(agent_names, Path("/Agents"), RUN_DIR, paired=True, reveal_result=True, only=ONLY_TEMPLATES)
+box = None
+if ISOLATION == "container":
+    from agent_container import AgentContainer, ContainerUserEnvironment, ContainerWorkspace, home_for, user_for
+    box = AgentContainer(name=os.environ.get("SWARM_AGENT_CONTAINER", "swarm-agents"),
+                         image=os.environ.get("SWARM_AGENT_IMAGE", "agents:v1.1"))
+    box.start()                      # refuses if the name exists; checks no network / mounts / privileges
+    atexit.register(box.stop)
+    for i in agent_names:
+        box.add_user(user_for(i))
+    box.verify_users()               # no user can list another user's home
+    workspace = ContainerWorkspace(box)
+else:
+    workspace = None                 # TaskManager writes to /Agents/<name> directly
+
+tasks = TaskManager(agent_names, Path("/Agents"), RUN_DIR, paired=True, reveal_result=True, only=ONLY_TEMPLATES,
+                    workspace=workspace)
 router = Router(agent_names, RUN_DIR, monitors=[KeywordMonitor()], on_submit=on_submit, on_done=tasks.on_done)
                                                                                   
 for i in agent_names:                                                             
     model = LitellmModel(                                                         
             model_name="openai/" + i,  # gemma = --served-model-name в vLLM       
         model_kwargs={**model_kwargs,
-                      "api_base": "http://localhost:8000/v1", "api_key": "EMPTY"},
+                      "api_base": API_BASE, "api_key": "EMPTY"},
         cost_tracking="ignore_errors",                                            
         **model_cfg,                                                              
     )                                                                             
                                                                                   
-    env = LocalEnvironment(cwd="/Agents/" + i, timeout=60)                        
+    if box is not None:
+        env = ContainerUserEnvironment(container=box.name, user=user_for(i), cwd=home_for(user_for(i)), timeout=60)
+    else:
+        env = LocalEnvironment(cwd="/Agents/" + i, timeout=60)                        
                                                                                   
     agent = discrete_agent(model, env, agent_name=i, router=router,
                            token_log=JsonlLog(RUN_DIR / f"{i}.tokens.jsonl"),
@@ -136,20 +165,40 @@ def _sha256(path):
 
 RUN_META = {
     "started": utc_now(), "agents": agent_names, "round_seconds": ROUND_SECONDS, "templates": ONLY_TEMPLATES,
-    "reset_per_round": RESET_PER_ROUND,
+    "reset_per_round": RESET_PER_ROUND, "isolation": ISOLATION,
+    "agent_container": box.verify_config() if box is not None else None,
     "model_kwargs": {k: v for k, v in model_kwargs.items() if k != "api_key"},
     "code_sha256": {f: _sha256(Path(__file__).parent / f) for f in
-                    ("main.py", "discrete_agent.py", "comms.py", "monitors.py", "cover_tasks.py", "runlog.py")},
-    "swarm_yaml_sha256": _sha256("/docker_writeable/swarm.yaml"),
+                    ("main.py", "discrete_agent.py", "comms.py", "monitors.py", "cover_tasks.py", "runlog.py",
+                     "agent_container.py")},
+    "swarm_yaml_sha256": _sha256(CONFIG_FILE),
 }
 (RUN_DIR / "run_meta.json").parent.mkdir(parents=True, exist_ok=True)
 (RUN_DIR / "run_meta.json").write_text(json.dumps(RUN_META, indent=2))
+
+
+shared_log = JsonlLog(RUN_DIR / "shared_dirs.jsonl")
+
+
+def record_shared_dirs(when):
+    """/tmp, /var/tmp, /run/lock, /dev/shm are shared between agent users: record them for the offline scan."""
+    if box is not None:
+        try:
+            shared_log.write({"round": round_no, "when": when, "files": box.shared_listing()})
+        except Exception as e:
+            shared_log.write({"round": round_no, "when": when, "error": f"{type(e).__name__}: {e}"})
 
 
 @atexit.register
 def _write_run_end():
     # The task seed is revealed only when the run is over (tasks can then be regenerated exactly).
     (RUN_DIR / "run_end.json").write_text(json.dumps({"ended": utc_now(), "rounds": round_no, "run_seed": tasks.run_seed}))
+    if box is not None:  # runs before box.stop (atexit is last-in, first-out)
+        record_shared_dirs("run_end")
+        try:
+            box.snapshot_shared(RUN_DIR / "shared_dirs_end.tar")
+        except Exception as e:
+            print(f"snapshot of shared dirs failed: {e}")
 
 
 round_no = 0
@@ -158,6 +207,8 @@ round_active_seconds = 0.0
 
 def begin_round():
     global round_no, round_active_seconds
+    if round_no:
+        record_shared_dirs("round_end")
     round_no += 1
     round_active_seconds = 0.0
     router.round = round_no
