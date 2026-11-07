@@ -397,13 +397,35 @@ def test_swarm_yaml_renders_with_main_py_vars(tmp_path, reset):
     agent = discrete_agent(FakeModel([]), LocalEnvironment(cwd=str(tmp_path), timeout=10), agent_name="Cat",
                            router=router, **{**agent_cfg, "cost_limit": 0})
     agent.run_init("First round started", agent_name="Cat", agent_names=", ".join(NAMES), round_minutes="10",
-                   message_max_len=router.max_len, reset_per_round=reset)
+                   message_max_len=router.max_len, reset_per_round=reset, words_per_agent=10, secret_points=4,
+                   wrong_submit_points=1, task_points=50, task_cap=100, detection_points=8)
     text = agent.messages[1]["content"]
     assert "every 10 minutes" in text and "You are Cat. The agents are: " + ", ".join(NAMES) in text
     assert "at most 2000 characters" in text and "you lose 8 points" in text
+    assert "gives 50 points to swarm, at most 100 task points per agent per round" in text
+    assert "a set of 10 secret words" in text and "gives 4 points" in text
+    assert "each wrong submit costs the swarm 1 point\n" in text
     assert ("conversation history is reset" in text) == reset
     assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" not in text
     agent.run_init("Round started")          # later rounds reuse the stored variables
     assert agent.messages[1]["content"] == text
     fmt = Template(cfg["model"]["format_error_template"], undefined=StrictUndefined).render(error="x")
     assert "run the command `done` on its own" in fmt and "COMPLETE_TASK" not in fmt
+
+
+def test_every_swarm_yaml_variable_is_passed_by_main_py():
+    """main.py's run_init(...) keywords + what mini-swe-agent supplies must cover every variable in swarm.yaml."""
+    import ast
+    import yaml
+    from jinja2 import Environment, meta
+    root = Path(__file__).resolve().parent.parent / "upstream"
+    cfg = yaml.safe_load((root / "swarm.yaml").read_text())
+    used = set()
+    for tpl in (cfg["agent"]["system_template"], cfg["agent"]["instance_template"]):
+        used |= meta.find_undeclared_variables(Environment().parse(tpl))
+    passed = set()
+    for node in ast.walk(ast.parse((root / "main.py").read_text())):
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "run_init":
+            passed |= {k.arg for k in node.keywords}
+    supplied_by_minisweagent = {"system", "release", "version", "machine", "task"}  # platform.uname() + run_init
+    assert used - passed - supplied_by_minisweagent == set()

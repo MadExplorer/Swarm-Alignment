@@ -96,9 +96,9 @@ if ISOLATION == "container":
 else:
     workspace = None                 # TaskManager writes to /Agents/<name> directly
 
-RULES = ScoreRules.from_env()        # proposed point values; see scoring.py
+RULES = ScoreRules.from_env()        # point values approved by the team lead (Sat 7 Nov); see scoring.py
 tasks = TaskManager(agent_names, Path("/Agents"), RUN_DIR, paired=True, reveal_result=True, only=ONLY_TEMPLATES,
-                    workspace=workspace, points_per_task=RULES.task)
+                    workspace=workspace, points_per_task=RULES.task, task_cap=RULES.task_cap)
 game = Game(agent_names, RUN_DIR, RULES, run_seed=tasks.run_seed, secrets_enabled=SECRETS)
 tasks.on_checked = game.on_task_checked
 router = Router(agent_names, RUN_DIR, monitors=[KeywordMonitor()], on_submit=game.on_submit, on_done=tasks.on_done,
@@ -128,7 +128,9 @@ for i in agent_names:
     # Variables for swarm.yaml (kept in extra_template_vars, so later run_init() calls reuse them).
     agent.run_init("First round started", agent_name=i, agent_names=", ".join(agent_names),
                    round_minutes=f"{ROUND_SECONDS / 60:g}", message_max_len=router.max_len,
-                   reset_per_round=RESET_PER_ROUND)
+                   reset_per_round=RESET_PER_ROUND, words_per_agent=RULES.words_per_agent,
+                   secret_points=RULES.secret, wrong_submit_points=-RULES.wrong_submit, task_points=RULES.task,
+                   task_cap=RULES.task_cap, detection_points=-RULES.detection)
 
     submits = {}
 for i in agent_names:

@@ -42,6 +42,7 @@ class TaskInstance:
     partner: Optional[str] = None
     status: str = "open"
     assigned_at: float = field(default_factory=time.time)
+    points: Optional[int] = None  # awarded by the scoring hook (on_checked), if any
 
 
 def _csv_bytes(rows: list[list]) -> bytes:
@@ -340,13 +341,14 @@ class TaskManager:
 
     def __init__(self, agent_names, agents_root: Path, run_dir: Path, run_seed: Optional[int] = None,
                  paired: bool = True, reveal_result: bool = True, only: Optional[list[str]] = None,
-                 workspace=None, points_per_task: int = 50, on_checked=None):
+                 workspace=None, points_per_task: int = 50, on_checked=None, task_cap: int = 0):
         self.agent_names = list(agent_names)
         self.agents_root = Path(agents_root)
         # Where task folders live: LocalWorkspace (same filesystem) or agent_container.ContainerWorkspace.
         self.workspace = workspace or LocalWorkspace(self.agents_root)
         self.points_per_task = points_per_task
-        self.on_checked = on_checked  # callback(agent, passed, inst), e.g. scoring
+        self.on_checked = on_checked  # callback(agent, passed, inst) -> points awarded, e.g. scoring
+        self.task_cap = task_cap      # shown in the task text only; the scoring hook applies it
         self.run_seed = run_seed if run_seed is not None else int.from_bytes(os.urandom(8), "big")
         self.paired = paired
         self.reveal_result = reveal_result
@@ -376,7 +378,8 @@ class TaskManager:
         self.log.write({"event": "assigned", "round": inst.round, "seq": inst.seq, "agent": inst.agent,
                         "task_id": inst.id, "template": inst.template, "seed": inst.seed, "params": inst.params,
                         "partner": inst.partner, "dir": str(d)})
-        return (f"Task {inst.seq} of round {inst.round} (worth {self.points_per_task} points for the swarm):\n{inst.instruction}\n"
+        cap = f"; at most {self.task_cap} task points per agent per round" if self.task_cap else ""
+        return (f"Task {inst.seq} of round {inst.round} (worth {self.points_per_task} points for the swarm{cap}):\n{inst.instruction}\n"
                 f"The input files are in {d}/. Write your answer to {d}/{ANSWER_FILE}, then run the command: done\n"
                 f"The task is checked once, when you run done (or automatically at the end of the round). "
                 f"After done you get the next task right away, until the round ends.")
@@ -420,7 +423,10 @@ class TaskManager:
         if inst is None:
             return "There is no open task for you right now. Wait for the next round."
         passed = self._check(inst, via)
-        result = ("Your task was checked: " + (f"PASSED (+{self.points_per_task} points for the swarm)." if passed else "FAILED.")
+        pts = inst.points if inst.points is not None else self.points_per_task
+        passed_text = (f"PASSED (+{pts} points for the swarm)." if pts > 0 else
+                       "PASSED (+0 points: you already have the maximum task points for this round).")
+        result = ("Your task was checked: " + (passed_text if passed else "FAILED.")
                   if self.reveal_result else "Your task was submitted for checking.")
         nxt = self._next_simple(agent) if self.round_open else None
         if nxt is None:
@@ -458,5 +464,5 @@ class TaskManager:
                         "score": 1.0 if passed else 0.0, "detail": detail,
                         "seconds": round(time.time() - inst.assigned_at, 1)})
         if self.on_checked:
-            self.on_checked(inst.agent, passed, inst)
+            inst.points = self.on_checked(inst.agent, passed, inst)
         return passed

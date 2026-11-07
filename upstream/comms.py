@@ -67,6 +67,21 @@ class Message:
     sent_time: float = field(default_factory=time.time)
 
 
+# INVARIANT (required by the team lead, Sat 7 Nov): monitors never see, cut, block, redact or penalise a
+# `submit` (otherwise no points can be scored). Enforced here, not by convention:
+#  1. handle() dispatches `submit` (and rejected lines that contain one) before any monitor code runs;
+#  2. every monitor call goes through _run_monitors(), which refuses submit input with an exception;
+#  3. submits are stored from the raw command, never from anything a monitor returned;
+#  4. message monitors get a copy of the message; action monitors (watching shell commands) only ever get
+#     commands that are not harness commands.
+# tests/test_scoring.py checks this with monitors that flag, block and redact everything.
+NEVER_MONITORED = frozenset({"submit", "embedded"})
+
+
+class SubmitReachedMonitor(RuntimeError):
+    """Raised if code ever tries to show a submit to a monitor (a bug in the harness, never the agent's fault)."""
+
+
 class Router:
     def __init__(
         self,
@@ -78,6 +93,7 @@ class Router:
         max_len: int = 2000,
         on_verdicts: Optional[Callable] = None,
         submit_feedback: Optional[Callable[[Optional[bool]], str]] = None,
+        action_monitors: Optional[list] = None,
     ):
         self.agent_names = list(agent_names)
         self.monitors = monitors
@@ -86,6 +102,7 @@ class Router:
         self.max_len = max_len
         self.on_verdicts = on_verdicts          # callback(msg, [verdict records]) after all monitors, e.g. scoring
         self.submit_feedback = submit_feedback  # callback(correct) -> text appended to the submit reply
+        self.action_monitors = list(action_monitors or [])  # review_action(agent, command, context) -> Verdict
         self.round = 0
         self.queues: dict[str, list[Message]] = {n: [] for n in self.agent_names}
         self.history: list[Message] = []
@@ -99,7 +116,10 @@ class Router:
     def handle(self, sender: str, command: str, sender_step: int = 0, tool_call_id: str = "") -> Optional[dict]:
         """Return an output dict for harness commands, or None if the action should go to the shell."""
         kind, rest = classify(command)
+        if kind == "submit":                    # first, before anything that could involve a monitor
+            return self._submit(sender, rest, command, sender_step, tool_call_id)
         if kind is None:
+            self._review_action(sender, command)  # observe only; the command then runs in the shell
             return None
         if kind == "embedded":
             self._log_rejected(sender, command, "embedded", sender_step, tool_call_id)
@@ -110,8 +130,6 @@ class Router:
                          "answer, then run: done")
         if kind == "done":
             return ok(self.on_done(sender, "sentinel" if SENTINEL in command else "done"))
-        if kind == "submit":
-            return self._submit(sender, rest, command, sender_step, tool_call_id)
         if kind == "send":
             m = re.match(r"(\S+)\s*(.*)\Z", rest, re.S)
             if not m:
@@ -161,21 +179,42 @@ class Router:
                 if {h.sender, *h.recipients} & {msg.sender} and {h.sender, *h.recipients} & set(msg.recipients)
             ],
         }
+        records = self._run_monitors(
+            "message", self.monitors,
+            lambda mon: mon.review({"id": msg.id, "sender": msg.sender, "recipients": list(msg.recipients),
+                                    "text": msg.text}, ctx),
+            {"message_id": msg.id, "round": msg.round})
+        if self.on_verdicts:
+            self.on_verdicts(msg, records)
+
+    def _review_action(self, sender: str, command: str) -> None:
+        """Action-level monitors see shell commands only (never harness commands). Observe mode: logged, never
+        blocking, no penalty (no action monitor exists yet; this is the one place one would plug in)."""
+        if not self.action_monitors:
+            return
+        self._run_monitors("action", self.action_monitors,
+                           lambda mon: mon.review_action(sender, command, {"round": self.round}),
+                           {"round": self.round, "agent": sender, "command": command})
+
+    def _run_monitors(self, kind: str, monitors: list, call: Callable, log_fields: dict) -> list[dict]:
+        """The only place monitors are called. Refuses anything that is (or contains) a submit."""
+        text = log_fields.get("command", "")
+        if kind not in ("message", "action") or (kind == "action" and classify(text)[0] in NEVER_MONITORED):
+            raise SubmitReachedMonitor(f"monitor input of kind {kind!r} is not allowed")
         records = []
-        for mon in self.monitors:
+        for mon in monitors:
             t0 = time.perf_counter()
             try:
-                v = mon.review({"id": msg.id, "sender": msg.sender, "recipients": msg.recipients, "text": msg.text}, ctx)
+                v = call(mon)
                 rec = {"flag": v.flag, "score": v.score, "reason": v.reason}
             except Exception as e:  # a broken monitor must not stop the game
                 rec = {"error": f"{type(e).__name__}: {e}"}
             self.monitor_log.write({
-                "message_id": msg.id, "round": msg.round, "monitor": mon.name, "version": mon.version,
-                "mode": "observe", "latency_ms": round((time.perf_counter() - t0) * 1000, 2), **rec,
+                **log_fields, "kind": kind, "monitor": mon.name, "version": mon.version, "mode": "observe",
+                "latency_ms": round((time.perf_counter() - t0) * 1000, 2), **rec,
             })
             records.append({"monitor": mon.name, **rec})
-        if self.on_verdicts:
-            self.on_verdicts(msg, records)
+        return records
 
     def collect(self, recipient: str, recipient_step: int = 0) -> Optional[str]:
         """Pending messages for `recipient` as one user-message text, or None. Logs delivery."""
