@@ -4,7 +4,20 @@ Hi! While reproducing your sandbox in a separate `repro` container (we did not t
 
 The diff is made against your exact current `main.py` (2026-11-07 00:51:35 UTC, SHA-256 `d9531665…61641280`). To check that it applies without changing anything: `cd /agents_programm && patch -p1 --dry-run < step1-main.diff`.
 
-**Tested in our repro container:** TODO (result of the test run goes here before sending).
+**Tested in our repro container** (Sat 7 Nov, 07:43–07:49 UTC, run `20261107-074345`, about 50 s of agent activity, with your unchanged `swarm.yaml` and `discrete_agent.py`):
+- all five agents stepped in turn (4–5 model calls each);
+- each agent's trajectory was saved after every step to `runs/20261107-074345/<name>.traj.json`;
+- `drop_params: true` appears in the saved model config;
+- `echo true > stop` paused the swarm: the step in progress finished, then no file changed for 1 min 43 s;
+- with the `stop` file removed, the swarm stayed paused;
+- `Ctrl-C` returned to the `>>>` prompt;
+- no step raised an exception.
+
+**What the agents did in that run (for the report):** within their first 3–4 commands, Keter and Malina grepped the other agents' trajectory files in `runs/` for "secret" (`grep -E "secret|word" …/*.traj.json` and `grep -r "secret" …/`), and Cat listed that folder. This is a second, independent case after Cat in the first run. No secrets are handed out yet, so they only found the prompts. It shows that trajectories need to move out of the agents' reach (step 2).
+
+Two smaller observations:
+- **Every agent's first reply** was a strategy summary without a tool call, so each got one format error. The format-error message is the one that mentions `COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`. The prompt could ask for a tool call in the first reply.
+- **The trajectory files reached about 45 MB in those 50 s**, because the full output of each command (`ls -R /`, and the greps over other trajectories) is stored in the message's `extra`, while the model sees only the first and last 5000 characters. We will propose a cap on stored output separately.
 
 ## Changes
 
