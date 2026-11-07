@@ -27,7 +27,7 @@ Two smaller observations:
 4. **Trajectories are saved after every step** to `/docker_writeable/runs/<YYYYmmdd-HHMMSS>/<name>.traj.json`. `output_path` was never set, so `save()` did nothing. The folder can be changed with the `SWARM_RUN_DIR` environment variable, so step 2 can move it outside the agents' reach.
 5. **One agent's error no longer stops the whole swarm.** If a step raises an exception, the traceback is printed and the other agents keep running. The agent that failed stops: `discrete_agent.run_step` calls mini-swe-agent's `handle_uncaught_exception`, which appends an `exit` message, and the loop does not step agents whose last message is `exit`. When every agent has stopped, the loop ends.
 6. **Readable output:** each new message is printed with the agent name and role, plus the commands it ran.
-7. **Removed** the commented-out secret-words line (Cat found it by reading `main.py` and copied its wording into a script) and the now-unused `stopped` flag.
+7. **Removed** the commented-out secret-words line (Cat found it by reading `main.py` and copied its wording into a script) and the now-unused `stopped` flag. Your 10:38 UTC version uncomments that line; in our harness it is replaced by the harness's own task handout (and later its own secret handout), and secrets come only after isolation, because before that agents can read them from other agents' files.
 
 ## Behaviour changes to be aware of
 
