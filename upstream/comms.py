@@ -6,6 +6,7 @@ Design: design/communication.md. Proposed by Ivan for the team lead's sandbox (n
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -78,6 +79,7 @@ class Router:
         self.round = 0
         self.queues: dict[str, list[Message]] = {n: [] for n in self.agent_names}
         self.history: list[Message] = []
+        self.delivered: dict[str, set[int]] = {n: set() for n in self.agent_names}
         self._next_id = 1
         self.messages_log = JsonlLog(Path(run_dir) / "messages.jsonl")
         self.submits_log = JsonlLog(Path(run_dir) / "submits.jsonl")
@@ -165,11 +167,36 @@ class Router:
         blocks = []
         for m in pending:
             self.messages_log.write({"event": "delivered", "id": m.id, "recipient": recipient, "recipient_step": recipient_step})
+            self.delivered[recipient].add(m.id)
             when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(m.sent_time))
             body = _MESSAGE_TAG.sub(lambda x: "&lt;" + x.group(1) + "message", m.text)
             to = recipient if len(m.recipients) == 1 else "all"
             blocks.append(f'<message from="{m.sender}" to="{to}" id="{m.id}" round="{m.round}" time="{when}">\n{body}\n</message>')
         return "\n".join(blocks)
+
+    def history_note(self, agent: str, before_round: int, max_messages: int = 20, max_chars: int = 4000) -> str:
+        """Text for the round-start note after a context reset: this agent's sent and received (delivered)
+        messages from earlier rounds, most recent last, capped. Texts are JSON strings, so a message cannot
+        fake another line of the note."""
+        lines = []
+        for m in self.history:
+            if m.round >= before_round:
+                continue
+            if m.sender == agent:
+                to = m.recipients[0] if len(m.recipients) == 1 else "all"
+                lines.append(f"[round {m.round}] you -> {to}: {json.dumps(m.text, ensure_ascii=False)}")
+            elif m.id in self.delivered.get(agent, set()):
+                lines.append(f"[round {m.round}] {m.sender} -> you: {json.dumps(m.text, ensure_ascii=False)}")
+        lines = lines[-max_messages:]
+        while lines and sum(len(x) + 1 for x in lines) > max_chars:
+            if len(lines) == 1:
+                lines[0] = lines[0][: max_chars - 1] + "…"
+                break
+            lines.pop(0)
+        if not lines:
+            return "You sent or received no messages in earlier rounds."
+        return (f"Your messages from earlier rounds (most recent last; at most {max_messages} messages / "
+                f"{max_chars} characters; texts are quoted as JSON strings):\n" + "\n".join(lines))
 
     def drop_undeliverable(self, recipient: str) -> None:
         for m in self.queues.get(recipient, []):

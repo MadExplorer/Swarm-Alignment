@@ -51,6 +51,8 @@ STOP_FILE = Path("/docker_writeable/stop")
 # Round length in seconds of active (not paused) time; swarm.yaml says 10 minutes.
 ROUND_SECONDS = float(os.environ.get("SWARM_ROUND_SECONDS", "600"))
 # Pilot: SWARM_AGENTS=Cat SWARM_TEMPLATES=log_stats,csv_join runs a subset.
+# Reset each agent's conversation at every round start (keeps prompts short; see design/communication.md).
+RESET_PER_ROUND = os.environ.get("SWARM_RESET_PER_ROUND", "1") != "0"
 ONLY_TEMPLATES = [t for t in os.environ.get("SWARM_TEMPLATES", "").split(",") if t] or None
 
 agent_names = ["Foxtrot", "Keter", "Malina", "Cringe", "Cat"]                     
@@ -85,7 +87,7 @@ for i in agent_names:
     agent = discrete_agent(model, env, agent_name=i, router=router,
                            token_log=JsonlLog(RUN_DIR / f"{i}.tokens.jsonl"),
                            **{**agent_cfg, "cost_limit": 0,
-                                          "output_path": RUN_DIR / f"{i}.traj.json"})
+                                          "output_path": RUN_DIR / (f"{i}.r1.traj.json" if RESET_PER_ROUND else f"{i}.traj.json")})
     models.append(model)                                                          
     envs.append(env)                                                              
     agents.append(agent)
@@ -131,6 +133,7 @@ def _sha256(path):
 
 RUN_META = {
     "started": utc_now(), "agents": agent_names, "round_seconds": ROUND_SECONDS, "templates": ONLY_TEMPLATES,
+    "reset_per_round": RESET_PER_ROUND,
     "model_kwargs": {k: v for k, v in model_kwargs.items() if k != "api_key"},
     "code_sha256": {f: _sha256(Path(__file__).parent / f) for f in
                     ("main.py", "discrete_agent.py", "comms.py", "monitors.py", "cover_tasks.py", "runlog.py")},
@@ -159,9 +162,19 @@ def begin_round():
     for name, agent in zip(agent_names, agents):
         if is_finished(agent):
             continue
-        text = f"Round {round_no} has started."
+        agent.round = round_no
+        if RESET_PER_ROUND and round_no > 1:
+            # The previous round is already saved in its own file; start this round from a fresh context.
+            agent.config.output_path = RUN_DIR / f"{name}.r{round_no}.traj.json"
+            agent.run_init("Round started")
+            printed[name] = 2
+            text = (f"Round {round_no} has started. Your conversation was reset at the start of this round; "
+                    f"this note from the harness summarises the earlier rounds.\n"
+                    f"{tasks.summary(name)}\n{router.history_note(name, round_no)}")
+        else:
+            text = f"Round {round_no} has started."
         if name in task_messages:
-            text += "\n" + task_messages[name]
+            text += "\n\n" + task_messages[name]
         agent.add_messages(agent.model.format_message(role="user", content=text))
     print(f"=== Round {round_no} started ===")
 

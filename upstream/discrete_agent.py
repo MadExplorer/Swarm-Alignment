@@ -15,6 +15,7 @@ class discrete_agent(DefaultAgent):
         self.token_log = token_log
         self._last_prompt_ids = []
         self._token_records = 0
+        self.round = 0  # set by the harness at each round start
         super().__init__(*args, **kwargs)
 
     def run_step(self):
@@ -108,7 +109,8 @@ class discrete_agent(DefaultAgent):
             k += 1
         self._token_records += 1
         self.token_log.write({
-            "record": self._token_records, "message_index": len(self.messages), "role": message.get("role"),
+            "record": self._token_records, "round": self.round, "message_index": len(self.messages),
+            "role": message.get("role"),
             "response_id": resp.get("id"), "prompt_len": len(prompt), "prefix_len": k,
             "prompt_suffix": prompt[k:], "completion": completion,
         })
