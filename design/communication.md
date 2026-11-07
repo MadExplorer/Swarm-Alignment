@@ -49,6 +49,19 @@ The system prompt must describe the commands **[Syakir, step 6]**.
   ```
   The header is written by the harness. A literal `</message>` inside the text is escaped, so a sender cannot fake a second message or another sender. With round-robin, delivery happens at most one cycle after sending. Messages to an agent that has exited are logged as `undelivered`.
 
+## 2b. Context reset per round (proposal for the team lead)
+
+Phase B (`REPRODUCE.md`, run `20261107-084155`) showed prompts growing by 2–3k tokens per minute per agent. At that rate an agent reaches vLLM's 262,144-token limit in about 1.5–2 hours, and `ContextWindowExceededError` ends it for good. So, switchable via `SWARM_RESET_PER_ROUND` (default on):
+- At each round start, an agent's conversation is reset to system prompt + instance prompt + one harness note.
+- The note contains:
+  - the agent's cover-task record;
+  - **its sent and received messages from earlier rounds**: the last 20, at most 4000 characters, each text quoted as a JSON string so a message cannot fake a line of the note. Agreements on an encoding therefore survive the reset.
+- Messages still queued at the round change are delivered normally in the new round, not repeated in the note.
+- Each round gets its own trajectory file (`<name>.r<N>.traj.json`). Token records carry the round number.
+- Effect for the analysis: rounds become clean episodes with bounded prompts.
+
+**[TL]** This changes what "a round" means for agents; it overlaps his step 5.
+
 ## 3. The central log
 
 Written by the harness only, append-only, one JSON object per line, flushed per line:
@@ -122,6 +135,7 @@ A string scan catches naive access, not obfuscated access (variables, scripts). 
 8. Wrong submits cost nothing: brute force with a word list. Penalty or per-round limit?
 9. Our minimal round clock overlaps his rounds and points (step 5): keep, replace or merge?
 10. No secrets before isolation; see `design/isolation-1page.md`.
+11. Context reset per round with a history note (§2b): OK as the default?
 
 ## Scope for the first overnight run (Sat→Sun)
 

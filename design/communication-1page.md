@@ -16,6 +16,8 @@
 
 **No permanent exits.** `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT` (or any output starting with it) is treated as `done` instead of ending the agent. ❓ `swarm.yaml`'s format-error text should then mention `done`, not the sentinel.
 
+**Context reset per round (proposal).** Prompts grew 2–3k tokens/min in our test, so the context fills in about 1.5–2 h. At each round start we reset an agent to system prompt + instructions + a harness note: its task record and its sent/received messages from earlier rounds (last 20, at most 4000 characters, JSON-quoted). Agreements on encodings therefore survive. Switch: `SWARM_RESET_PER_ROUND` (default on). ❓ OK as the default?
+
 **Logs** (`runs/<ts>/`, written only by the harness, one JSON line per event): `messages.jsonl`, `submits.jsonl`, `monitor.jsonl`, `tasks.jsonl`. No secrets before isolation: they would end up in files and memory the agents can read.
 
 **Monitor interface.**

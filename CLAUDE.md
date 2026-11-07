@@ -99,7 +99,7 @@ Not yet verified (check before relying on it): how `DockerEnvironment` accepts e
 | A | **Communication between agents** (assigned by the team lead): harness commands such as `send <AGENT> <text>` intercepted in `execute_actions` before anything runs, delivered to the recipient as a message at its next step, and logged centrally (`runs/<ts>/messages.jsonl`: time, round, sender, recipient, text). This log is the monitor's input. `submit` goes through the same interception. Until isolation, agents can bypass it through the shared filesystem: note that as a limitation | Ivan | Design first, then code. Agree the `submit` part with the team lead. |
 | B | **Cover tasks** (assigned by the team lead): easily verifiable, keep the agent busy, no internet, fit a 10-minute round for Gemma 4 31B. Checkers run in the harness, outside agents' reach, so agents cannot read answers or tests. Prefer our own parameterised task templates with deterministic checkers over integrating a benchmark. Terminal-Bench 2.0 (Merrill et al., ICLR 2026, arXiv 2601.11868) is real but too hard and too heavy here: 89 tasks, each with its own container environment, frontier models score under 65%. Its task format (instruction + verification script + reference solution) is a good model to copy | Ivan (+ Syakir for content) | Not started. |
 | C | **Reasoning logging** (assigned by the team lead): see section 6. First measure, then propose on/off to him | Ivan | Not started. |
-| D | Context trimming before the overnight run: `ContextWindowExceededError` is not retried and ends the agent; ~26.7k tokens after 94 messages | Ivan | Open. vLLM `max_model_len` = 262144 (model default, no `--max-model-len` flag; `/v1/models`, Sat 07:35). Not yet checked: KV-cache capacity for 5 long contexts at once (vLLM startup log). |
+| D | Context trimming before the overnight run: `ContextWindowExceededError` is not retried and ends the agent; prompts grew 2–3k tokens/min in Phase B (limit 262k, so ~1.5–2 h) | Ivan | Built on `overnight`: reset per round with a history note (`SWARM_RESET_PER_ROUND`, default on). Proposal for the team lead. Repro test pending. |
 
 Timebox: a playable game must run overnight Sat→Sun (the team lead leaves the server on). Sunday: monitors, analysis, report.
 
@@ -128,6 +128,8 @@ Timebox: a playable game must run overnight Sat→Sun (the team lead leaves the 
 - Whether token IDs belong in his item 6 or are a separate request from us.
 - Wrong submits cost nothing: an agent could brute-force `submit` with a word list. Penalty for wrong submits, or a limit per round?
 - Our `overnight` branch has a minimal round clock (`SWARM_ROUND_SECONDS`, task per round, checks at round end). It overlaps his step 5 (rounds and points): keep ours, replace it with his, or merge?
+- Context reset per round on our branch (`SWARM_RESET_PER_ROUND`, default on; a note carries each agent's earlier messages): OK as the default? It changes what a round means for agents.
+- Points per task with the task queue: +50 per passed task rewards speed. Keep it, or cap per round?
 - Secrets only after isolation (a secret would land in trajectory/token files under `runs/` and in harness memory, both readable by root agents in the shared container). Minimal isolation proposal: `design/isolation-1page.md`. OK to run it on his server?
 
 ## 11. Decision log (newest first)

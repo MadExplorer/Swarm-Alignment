@@ -29,6 +29,8 @@ Eight more templates are designed for later: fix a buggy script, reorganise file
 
 An offline self-test runs before any run: for 50 seeds per template, the reference passes and empty or slightly wrong outputs fail.
 
+**Task queue (proposal).** In our test, tasks took 32–80 s, so agents idled for most of a round and looped on empty replies. Now each agent works through a queue: after `done` (pass or fail) it gets its next task at once, until the round ends. The templates are harder too (two steps each, 20–40k log lines, 3–6k orders, a refunds file, a discount rule in the paired task). ❓ Points: +50 per passed task with a queue means more tasks give more points. Keep that, or cap per round?
+
 **Flow per round.**
 1. At round start the harness writes the input files to `/Agents/<name>/task_r<N>/` and adds one user message with the instruction, ending "when finished, run `done`".
 2. `done` checks the task once (no retries).
