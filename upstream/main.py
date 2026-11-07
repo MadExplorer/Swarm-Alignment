@@ -183,15 +183,21 @@ print(f"Saving trajectories to {RUN_DIR}")
 begin_round()
 paused_notice_shown = False
 last_tick = None
+pause_started = None
 while True:
     if stop_requested():
         last_tick = None  # paused time does not count towards the round
+        if pause_started is None:
+            pause_started = time.time()
         if not paused_notice_shown:
             print(f"Paused: {STOP_FILE} does not contain 'false'. Waiting...")
             paused_notice_shown = True
         time.sleep(2)
         continue
     paused_notice_shown = False
+    if pause_started is not None:
+        tasks.shift_open(time.time() - pause_started)  # nor towards task durations
+        pause_started = None
 
     now = time.monotonic()
     if last_tick is not None:

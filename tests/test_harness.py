@@ -41,6 +41,12 @@ NAMES = ["Foxtrot", "Keter", "Malina", "Cringe", "Cat"]
     ('echo "I will send it"', None),
     ("grep submit notes.txt", None),
     ("for f in *; do echo $f; done", None),
+    ("echo 42 > answer.txt && done", "embedded_done"),
+    ("echo 42 > answer.txt\ndone", "embedded_done"),
+    ("echo 42 > answer.txt; done", "embedded_done"),
+    ("while true; do sleep 1; done", None),
+    ("echo done", None),
+    ("echo task is done > notes.txt", None),
     ("ls -la", None),
     ("sender --help", None),
     ("donе", None),
@@ -110,6 +116,21 @@ def test_broadcast_and_submit(tmp_path):
     assert calls == [("Cat", "Keter", "apple pie")]
     assert "other agents" in r.handle("Cat", "submit Cat apple")["output"]
     assert read_jsonl(tmp_path / "submits.jsonl")[0]["correct"] is True
+
+
+def test_embedded_done_is_rejected_unexecuted(tmp_path):
+    r = make_router(tmp_path)
+    out = r.handle("Cat", "echo 42 > answer.txt && done")
+    assert out["returncode"] == 1 and "nothing was executed" in out["output"]
+    assert read_jsonl(tmp_path / "messages.jsonl")[0]["reason"] == "embedded_done"
+
+
+def test_shift_open(tmp_path):
+    tm = TaskManager(["Cat"], tmp_path / "A", tmp_path / "r", run_seed=1, paired=False)
+    tm.start_round(1)
+    t0 = tm.open["Cat"].assigned_at
+    tm.shift_open(100.0)
+    assert tm.open["Cat"].assigned_at == t0 + 100.0
 
 
 def test_done_and_sentinel(tmp_path):

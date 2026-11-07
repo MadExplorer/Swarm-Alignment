@@ -22,6 +22,10 @@ _SENTINEL_ECHO = re.compile(r"""^echo\s+(['"]?)COMPLETE_TASK_AND_SUBMIT_FINAL_OU
 # a harness word in command position later in a shell line: after ; && || | or a newline
 _EMBEDDED = re.compile(r"(;|&&|\|\||\||\n)\s*(send|broadcast|submit)\b")
 _MESSAGE_TAG = re.compile(r"<(/?)message", re.IGNORECASE)
+# `done` attached to a shell line (`echo 42 > answer.txt && done`) reaches bash as a syntax error, because
+# bash's own `done` keyword closes a `do` loop. Without a `do` in the line it can only be our command.
+_EMBEDDED_DONE = re.compile(r"(;|&&|\|\||\||\n)\s*done\b")
+_BASH_DO = re.compile(r"\bdo\b")
 
 
 def ok(text: str) -> dict:
@@ -48,6 +52,8 @@ def classify(command: str) -> tuple[Optional[str], str]:
         return m.group(1), m.group(2).strip()
     if _EMBEDDED.search(command):
         return "embedded", ""
+    if _EMBEDDED_DONE.search(command) and not _BASH_DO.search(command):
+        return "embedded_done", ""
     return None, ""
 
 
@@ -94,6 +100,10 @@ class Router:
         if kind == "embedded":
             self._log_rejected(sender, command, "embedded", sender_step, tool_call_id)
             return error("send/broadcast/submit must be the whole command, not part of a shell line")
+        if kind == "embedded_done":
+            self._log_rejected(sender, command, "embedded_done", sender_step, tool_call_id)
+            return error("nothing was executed. Run done as a separate command on its own: first write your "
+                         "answer, then run: done")
         if kind == "done":
             return ok(self.on_done(sender, "sentinel" if SENTINEL in command else "done"))
         if kind == "submit":

@@ -404,6 +404,11 @@ class TaskManager:
             self._check(inst, "round_end")
         self.round_open = False
 
+    def shift_open(self, seconds: float) -> None:
+        """Paused time does not count towards a task's duration."""
+        for inst in self.open.values():
+            inst.assigned_at += seconds
+
     def summary(self, agent: str) -> str:
         p, f = self.stats.get(agent, [0, 0])
         return f"Your cover tasks so far: {p} passed, {f} failed."
