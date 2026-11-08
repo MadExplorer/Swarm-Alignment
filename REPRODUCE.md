@@ -270,3 +270,23 @@ Run folders copied to Ivan's Mac `evidence/runs/` (153 files incl. `validation-c
 The watcher's `Traceback` match was an agent's own script error inside its container (`/home/foxtrot/solve_orders.py`), not the harness.
 
 **Bug found (analysis code, not the harness):** `shared_events.jsonl` stores raw bytes of binary files (e.g. SQLite task databases) in `binary_text`. These contain `\x85`, which `json.dumps` leaves unescaped and Python's `str.splitlines()` treats as a line break. `load_run._jsonl` therefore raised `JSONDecodeError`, and `serve_runs.read_jsonl` silently dropped those records (331 of 349 and 116 of 124 seen). Split on `"\n"` only; the files themselves are valid JSONL (every `\n`-separated line parses). Fixed in `analysis/load_run.py` and `analysis/serve_runs.py` with a regression test (`tests/test_load_run.py::test_jsonl_lines_are_split_on_newline_only`). The deployed `d6702ee` still has the bug (the endpoint's `/scores` for shared-folder runs) until the next deploy.
+
+## 10. Runs A and B (launched 15:45 UTC Sun 8 Nov 2026, Ivan's go-ahead)
+
+Deployed `ccf89d24b404654b19d7951811d223ba85b6d7f8` (adds `SWARM_RUN_PREFIX`, `variant`/`api_base`/`deployed_commit` in `run_meta.json`, and the JSONL reader fix) to `/root/repro/host` with the hash check (40/40). The previous deploy is kept as `/root/repro/host.d6702ee` (+ `/root/repro/host.d6702ee-DEPLOYED_COMMIT`). Tests on tl2: Docker-free 334 passed / 24 skipped; real-container (`agents:v1.1`) 66 passed, no leftovers. Endpoint restarted on the new code (`/scores` now works on shared-folder runs).
+
+Both in `/root/repro/host-runs`, order `collusive:12,honest:12` × 3 (300 s rounds, new seed per block):
+
+```
+# common: SWARM_ISOLATION=container SWARM_AGENT_IMAGE=agents:v1.1 SWARM_RUN_DIR=/root/repro/host-runs SWARM_CONFIG=/root/repro/host/upstream/swarm.yaml SWARM_ROUND_SECONDS=300 PYTHONDONTWRITEBYTECODE=1 SWARM_DEPLOYED_COMMIT=$(cat /root/repro/host-DEPLOYED_COMMIT)
+# tmux repro:runA (stop file /root/repro/stop-A):
+SWARM_RUN_PREFIX=A SWARM_SHARED_FOLDER=1 SWARM_API_BASE=http://127.0.0.1:8000/v1 SWARM_AGENT_CONTAINER=repro  SWARM_STOP_FILE=/root/repro/stop-A /root/repro/host-venv/bin/python run_blocks.py --order collusive:12,honest:12,collusive:12,honest:12,collusive:12,honest:12 2>&1 | tee /root/repro/host-runs/A-console.log
+# tmux repro:runB (stop file /root/repro/stop-B):
+SWARM_RUN_PREFIX=B SWARM_SHARED_FOLDER=0 SWARM_API_BASE=http://127.0.0.1:8001/v1 SWARM_AGENT_CONTAINER=repro2 SWARM_STOP_FILE=/root/repro/stop-B /root/repro/host-venv/bin/python run_blocks.py --order collusive:12,honest:12,collusive:12,honest:12,collusive:12,honest:12 2>&1 | tee /root/repro/host-runs/B-console.log
+```
+
+First blocks: `A-20261108-154508-collusive` (variant A, shared folder on, 8000) and `B-20261108-154508-collusive` (variant B, off, 8001), both with `deployed_commit` `ccf89d2…`. They started in the same second, which the prefix keeps apart. Confound to report: the variant is tied to the server (A = GPUs 0,1 / 8000, B = GPUs 2,3 / 8001); both servers have identical engine configs and gave identical token IDs for the same greedy requests.
+
+## 11. Activation replay kit for teammates
+
+`dist/replay-activations-kit.zip` (not in git): `replay_activations.py`, `replay-activations.md`, `requirements-replay.txt`, `README.md`. Adds the `--tokens-json` input mode (endpoint exports of `/runs/<run>/agents/<name>/tokens?full=1`). Checked: token IDs identical to the run-folder mode on `20261108-145133-collusive` round 1 (through the real endpoint code), identical tiny-model activations, standalone dry run without the repo or torch. GPU facts, checked in the installed source but not run on a GPU: compressed-tensors decompresses the checkpoint to bf16 on the first forward pass; 31.27 B parameters ≈ 62.5 GB.
