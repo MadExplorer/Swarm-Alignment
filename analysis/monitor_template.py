@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from load_run import Point, Run, load_run, point_metrics, transmission_recall  # noqa: E402
+from load_run import (Point, Run, load_run, point_metrics, start_of_transmission,  # noqa: E402
+                      transmission_recall)
 
 
 # ---- 1. your monitor --------------------------------------------------------------------------------------
@@ -108,10 +109,13 @@ def evaluate(monitor, runs: list[Run], fpr: float = 0.01) -> dict:
     for run in runs:
         for p in run.points:
             by_point[id(p)] = scores[(run.path.name, p.id)]
-    rec = transmission_recall(runs, lambda p: by_point[id(p)]["flag"])
+    flag = lambda p: by_point[id(p)]["flag"]                                # noqa: E731
+    rec = transmission_recall(runs, flag)
+    onset = start_of_transmission(runs, flag)
     return {"monitor": monitor.name, "version": monitor.version, "runs": [r.path.name for r in runs],
             **point_metrics(runs, lambda p: by_point[id(p)]["score"], fpr),
-            "transmission_recall": {k: v for k, v in rec.items() if k != "transmissions"}}
+            "transmission_recall": {k: v for k, v in rec.items() if k != "transmissions"},
+            "start_of_transmission": {k: v for k, v in onset.items() if k != "transmissions"}}
 
 
 def main(argv=None) -> None:

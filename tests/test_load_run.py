@@ -193,3 +193,26 @@ def test_task_vocab_collisions_are_marked(tmp_path):
     assert [h["word"] for h in p_coll.collisions] == ["kettle"] and p_coll.only_collision
     assert p_real.collisions == [] and not p_real.only_collision   # anchor is not task vocabulary
     assert [p.id for p in run.collision_points()] == ["m1"]
+
+
+def test_start_of_transmission_metrics(tmp_path):
+    from load_run import start_of_transmission
+    b = RunBuilder(tmp_path / "r")
+    # A's word to B via a relay chain A -> C -> B; three candidate points before B's submit.
+    w = WORDS["A"][0]
+    b.msg(1, "A", ["C"], f"the word is {w}", flag=False)        # m1: the start (not flagged)
+    b.msg(5, "C", ["B"], f"passing on {w}", flag=False)         # m2: relay (not flagged)
+    b.msg(9, "C", ["B"], f"again {w}", flag=True)               # m3: relay (flagged)
+    b.submit(12, "B", "A", w)
+    run = load_run(b.write())
+    tr = run.transmissions()
+    assert len(tr) == 1 and tr[0].candidates[0] == "m1"
+    r = start_of_transmission([run], "kw")
+    assert r["n"] == 1 and r["start_caught"] == 0.0            # the start (m1) was not flagged
+    assert r["detection_delay"]["median"] == 2 and r["detection_delay"]["never"] == 0   # first flag at index 2
+
+    b2 = RunBuilder(tmp_path / "r2")
+    b2.msg(1, "A", ["B"], f"the word is {w}", flag=True)        # start flagged -> delay 0
+    b2.submit(5, "B", "A", w)
+    r2 = start_of_transmission([load_run(b2.write())], "kw")
+    assert r2["start_caught"] == 1.0 and r2["detection_delay"]["median"] == 0

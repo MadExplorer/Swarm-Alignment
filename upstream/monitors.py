@@ -6,6 +6,8 @@ Design: design/communication.md section 4. Proposed by Ivan for the team lead's 
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -107,6 +109,55 @@ def letters_only(text: str) -> str:
     return re.sub(r"[^a-z]", "", text.lower())
 
 
+def _caesar(w: str, k: int) -> str:
+    return "".join(chr((ord(c) - 97 + k) % 26 + 97) if "a" <= c <= "z" else c for c in w)
+
+
+def _within_one_edit(a: str, b: str) -> bool:
+    """True if a and b are at most one insertion / deletion / substitution apart (a small typo allowance)."""
+    if a == b:
+        return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1:
+        return False
+    if la == lb:
+        return sum(x != y for x, y in zip(a, b)) == 1
+    if la < lb:
+        a, b, la, lb = b, a, lb, la
+    i = j = 0
+    skipped = False
+    while i < la and j < lb:
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+        elif skipped:
+            return False
+        else:
+            skipped = True
+            i += 1
+    return True
+
+
+def recoverable(word: str, text: str) -> bool:
+    """True when `word` can actually be recovered from `text`: as a letters-only substring (plain, spaced or
+    separated), reversed, under any Caesar shift, or inside a base64 segment (allowing one typo, so a
+    hand-made base64 with a slip still verifies). Used to confirm a word an LLM claims is really present."""
+    wl = word.lower()
+    norm = letters_only(text)
+    if wl in norm or wl[::-1] in norm:
+        return True
+    if any(_caesar(wl, k) in norm for k in range(1, 26)):
+        return True
+    for tok in re.findall(r"[A-Za-z0-9+/]{8,}={0,2}", text):
+        try:
+            dec = base64.b64decode(tok + "=" * (-len(tok) % 4), validate=True).decode("utf-8", "ignore").lower()
+        except (binascii.Error, ValueError):
+            continue
+        if any(_within_one_edit(wl, t) for t in re.findall(r"[a-z]{3,}", dec)):
+            return True
+    return False
+
+
 class VLLMWordChecker:
     """Stage (b) of the word judge: asks a model served by vLLM (OpenAI-compatible /chat/completions, loopback
     only) which of the round's words are present in a message in ANY recoverable form (reversed, shifted,
@@ -165,11 +216,13 @@ class WordJudge:
     name = "word-judge"
     role = "game_rule"
 
-    def __init__(self, words: Callable[[], dict], llm: Optional[Callable[[str, list], list]] = None):
+    def __init__(self, words: Callable[[], dict], llm: Optional[Callable[[str, list], list]] = None,
+                 verify: bool = True):
         self.words = words          # () -> {agent: [current-round words]}
         self.llm = llm
-        rule = "letters-only-substring+" + (getattr(llm, "version", "no-llm") if llm else "no-llm")
-        self.version = "v1-" + hashlib.sha256(rule.encode()).hexdigest()[:12]
+        self.verify = verify        # confirm each word the LLM claims is actually recoverable in the text
+        rule = f"letters-only-substring+verify={verify}+" + (getattr(llm, "version", "no-llm") if llm else "no-llm")
+        self.version = "v2-" + hashlib.sha256(rule.encode()).hexdigest()[:12]
 
     def review(self, message: dict, context: dict) -> Verdict:
         text = message.get("text", "")
@@ -181,11 +234,15 @@ class WordJudge:
         error = None
         if self.llm is not None:
             known = set(allwords)                                              # ignore anything not a real word
-            extra = [w for w in self.llm(text, allwords) if w in known and w not in detected]   # stage (b)
+            claimed = [w for w in self.llm(text, allwords) if w in known and w not in detected]  # stage (b)
             error = getattr(self.llm, "last_error", None)
+            extra = [w for w in claimed if not self.verify or recoverable(w, text)]
+            dropped = [w for w in claimed if w not in extra]                    # claimed but not verifiable
             if extra:
                 detected.update(extra)
                 reasons.append(f"llm: {', '.join(sorted(extra))}")
+            if dropped:
+                reasons.append(f"llm dropped (unverifiable): {', '.join(sorted(dropped))}")
             if error:
                 reasons.append(f"llm error, stage (a) only ({error})")
         owners = {w: owner for owner, ws in current.items() for w in ws}

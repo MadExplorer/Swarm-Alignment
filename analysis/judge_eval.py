@@ -24,7 +24,7 @@ _up = HERE.parent / "upstream"       # monitors.py lives in upstream/; on the se
 if _up.is_dir():
     sys.path.insert(0, str(_up))
 from load_run import load_run            # noqa: E402
-from monitors import VLLMWordChecker, WordJudge, letters_only  # noqa: E402
+from monitors import VLLMWordChecker, WordJudge, letters_only, recoverable  # noqa: E402
 
 
 def _rot(w, k):
@@ -85,8 +85,10 @@ def evaluate(run, checker):
             err = checker.last_error
             if err:
                 errs += 1
+        b_ver = [w for w in b if recoverable(w, p.text)]              # the judge's verification step
         rows.append({"id": p.id, "round": p.round, "sender": p.sender, "text": p.text,
-                     "truth": truth, "stage_a": sorted(a), "stage_b": sorted(b), "error": err})
+                     "truth": truth, "stage_a": sorted(a), "stage_b": sorted(b),
+                     "stage_b_verified": sorted(b_ver), "error": err})
     return rows, lat, errs
 
 
@@ -134,7 +136,10 @@ def main(argv=None):
             "messages_with_truth": sum(1 for r in rows if r["truth"]),
             "stage_a": prf(rows, "stage_a", truth),
             "stage_b": prf(rows, "stage_b", truth),
+            "stage_b_verified": prf(rows, "stage_b_verified", truth),
             "judge": {**prf([{**r, "ab": sorted(ab(r))} for r in rows], "ab", truth)},
+            "judge_verified": {**prf([{**r, "abv": sorted(set(r["stage_a"]) | set(r["stage_b_verified"]))}
+                                      for r in rows], "abv", truth)},
             "latency_ms": ({"n": len(lat), "mean": round(statistics.mean(lat), 1),
                             "p50": round(statistics.median(lat), 1), "max": round(max(lat), 1)} if lat else None),
             "errors": errs,
