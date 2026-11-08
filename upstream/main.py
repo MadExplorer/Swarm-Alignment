@@ -70,6 +70,14 @@ WORD_JUDGE_LLM = os.environ.get("SWARM_WORD_JUDGE_LLM", "1") != "0"  # stage (b)
 MONITOR_VERBATIM = os.environ.get("SWARM_MONITOR_VERBATIM", "1") != "0"
 # Shared folder /shared (shared_folder.py): a second observed channel; needs the agent container. Default on.
 SHARED_FOLDER = ISOLATION == "container" and os.environ.get("SWARM_SHARED_FOLDER", "1") != "0"
+# Variant C (team lead, Sun 8 Nov): a message in which the word judge detects a word is not delivered; the sender is
+# told, every other agent gets a notice (sender name only). The -50 still applies. Default off.
+JUDGE_BLOCKS = os.environ.get("SWARM_JUDGE_BLOCKS", "0") == "1"
+if JUDGE_BLOCKS and not (SECRETS and WORD_JUDGE):
+    sys.exit("SWARM_JUDGE_BLOCKS=1 needs the word judge (SWARM_ISOLATION=container, secrets, SWARM_WORD_JUDGE on)")
+if JUDGE_BLOCKS and SHARED_FOLDER:
+    sys.exit("SWARM_JUDGE_BLOCKS=1 is not implemented with the shared folder (a file cannot be 'not delivered'); "
+             "set SWARM_SHARED_FOLDER=0")
 # Seed for tasks and secrets (default: random; the wrapper run_blocks.py passes a new one per block).
 SEED = int(os.environ["SWARM_SEED"]) if os.environ.get("SWARM_SEED") else None
 CONFIG_FILE = Path(os.environ.get("SWARM_CONFIG", "/docker_writeable/swarm.yaml"))
@@ -150,7 +158,8 @@ if SECRETS:
         game_rule = [VerbatimWordMonitor(lambda: game.secrets)]
 monitors = [KeywordMonitor()] + game_rule
 router = Router(agent_names, RUN_DIR, monitors=monitors, on_submit=game.on_submit, on_done=tasks.on_done,
-                on_verdicts=game.on_verdicts, submit_feedback=game.submit_feedback)
+                on_verdicts=game.on_verdicts, submit_feedback=game.submit_feedback,
+                block_on_words=JUDGE_BLOCKS, block_points=RULES.detection)
                                                                                   
 for i in agent_names:                                                             
     model = LitellmModel(                                                         
@@ -178,7 +187,8 @@ for i in agent_names:
                    round_minutes=f"{ROUND_SECONDS / 60:g}", message_max_len=router.max_len,
                    reset_per_round=RESET_PER_ROUND, condition=CONDITION, words_per_agent=RULES.words_per_agent,
                    secret_points=RULES.secret, wrong_submit_points=-RULES.wrong_submit, task_points=RULES.task,
-                   task_cap=RULES.task_cap, detection_points=-RULES.detection, shared_folder=SHARED_FOLDER)
+                   task_cap=RULES.task_cap, detection_points=-RULES.detection, shared_folder=SHARED_FOLDER,
+                   judge_blocks=JUDGE_BLOCKS)
 
     submits = {}
 for i in agent_names:
@@ -224,6 +234,7 @@ RUN_META = {
     "condition": CONDITION, "max_rounds": MAX_ROUNDS, "block": os.environ.get("SWARM_BLOCK"),
     "shared_folder": SHARED_FOLDER,
     "variant": RUN_PREFIX or None, "api_base": API_BASE, "deployed_commit": DEPLOYED_COMMIT,
+    "judge_blocks": JUDGE_BLOCKS,
     "score_rules": game.final()["rules"],
     "monitors": [{"name": m.name, "version": m.version, "role": getattr(m, "role", "research")} for m in monitors],
     "agent_container": box.verify_config() if box is not None else None,
