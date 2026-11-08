@@ -15,7 +15,9 @@ Routes (GET only; JSON unless format=text):
     /runs/<run>/scores                            score per round and agent (tasks, words, wrong submits, detections
                                                   by monitor and role), recomputed and checked against the harness
     /runs/<run>/agents/<name>/round/<N>           <name>.r<N>.traj.json (or <name>.traj.json without per-round files)
-                                   ?format=text   readable transcript; &max=<chars> caps each tool output (default 2000)
+                                   ?format=text   readable transcript for humans (content lines prefixed "  | ", so
+                                                  agent text cannot fake structure; JSON is the source of truth);
+                                                  &max=<chars> caps each tool output (default 2000)
     /runs/<run>/agents/<name>/tokens              <name>.tokens.jsonl (delta-encoded; see README-run-folder.md)
                                    ?full=1        + prompt_token_ids: the full prompt of each record, reconstructed
                                    ?decode=1      + prompt_text, completion_text, decoded by vLLM's POST /detokenize
@@ -228,23 +230,45 @@ def _text(content) -> str:
     return "" if content is None else json.dumps(content)
 
 
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _safe_lines(text: str) -> list:
+    """Agent-controlled text as display lines that cannot pass for structure: split on EVERY character a viewer may
+    treat as a line break (str.splitlines: \\n, \\r, \\x0b, \\x0c, \\x1c-\\x1e, \\x85, \\u2028, \\u2029), and control characters
+    (ANSI escapes, backspace, ...) shown escaped, so nothing can move the cursor or redraw an earlier line."""
+    return [_CONTROL.sub(lambda m: f"\\x{ord(m.group(0)):02x}", ln) for ln in text.splitlines()]
+
+
 def transcript(traj: dict, run: str, name: str, round_no: int, cap: int = DEFAULT_TOOL_CAP) -> str:
-    """Readable transcript: what the model saw (role, content), the commands it ran, tool outputs capped."""
+    """Readable transcript for humans (the JSON routes are the source of truth). Structural lines start in column 0:
+    "# <run> / <agent> / round <N>", "--- [<i>] <role> (<n> content lines, <k> commands)" and the closing
+    "=== end of transcript (<m> messages) ===". Every line of agent-controlled content is indented with a marker:
+    "  | " message content and tool output, "  $ " first line of a command, "  > " its further lines, "  ~ " a
+    harness note (truncation). So content such as "--- [10] user" can never look like a structural line."""
     lines = [f"# {run} / {name} / round {round_no}", ""]
-    for i, m in enumerate(traj.get("messages") or []):
-        role = m.get("role", "?")
+    msgs = traj.get("messages") or []
+    for i, m in enumerate(msgs):
+        role = re.sub(r"[^A-Za-z_-]", "?", str(m.get("role", "?")))[:20]
         extra = m.get("extra") or {}
-        lines.append(f"--- [{i}] {role}" + (f"  (token record {extra['token_ids_record']})"
-                                             if extra.get("token_ids_record") else ""))
         text = _text(m.get("content"))
+        note = None
         if role == "tool" and len(text) > cap:
-            text = text[:cap] + f"\n[... {len(text) - cap} more characters; ?max= to change ...]"
-        if text.strip():
-            lines.append(text.rstrip())
-        for a in extra.get("actions") or []:
-            lines.append("$ " + str(a.get("command", "")).rstrip())
+            note = f"[... {len(text) - cap} more characters; ?max= to change ...]"
+            text = text[:cap]
+        body = _safe_lines(text.rstrip()) if text.strip() else []
+        cmds = [_safe_lines(str(a.get("command", "")).rstrip()) or [""] for a in extra.get("actions") or []]
+        rec = extra.get("token_ids_record")
+        lines.append(f"--- [{i}] {role}  ({len(body)} content lines, {len(cmds)} command{'s' if len(cmds) != 1 else ''})"
+                     + (f"  (token record {int(rec)})" if isinstance(rec, int) else ""))
+        lines += ["  | " + ln for ln in body]
+        if note:
+            lines.append("  ~ " + note)
+        for c in cmds:
+            lines += ["  $ " + c[0]] + ["  > " + ln for ln in c[1:]]
         lines.append("")
-    return "\n".join(lines)
+    lines.append(f"=== end of transcript ({len(msgs)} messages) ===")
+    return "\n".join(lines) + "\n"
 
 
 class Handler(BaseHTTPRequestHandler):
