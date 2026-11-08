@@ -316,3 +316,12 @@ cd /root/repro/endpoint-27bead5/analysis && PYTHONDONTWRITEBYTECODE=1 /root/repr
 ```
 
 Checked: `/runs` lists A/B/C with `variant` (C `judge_blocks: true`); `/runs/C-…/messages` shows `blocked` and `block_notice` events; `?format=text` has the new structure; `/runs/A-20261108-154508-collusive/scores` check all true.
+
+## 14. Team tools: swarm-run / swarm-stop / swarm-eval (`docs/QUICKSTART.md`)
+
+- Bare mirror of this repo on the server: `/root/repro/repo.git` (`git push tl2:/root/repro/repo.git shared-folder`), the source for every deploy by `git archive <commit>`.
+- Tools snapshot: `/root/repro/bin/repo-e5d81da` (`git archive e5d81da`, every file checked against its blob hash: 57/57), with the links `/root/repro/bin/swarm-{run,stop,eval}`. Earlier snapshot `repo-ec059c7` kept.
+- Tests from the snapshot with the host venv: Docker-free 371 passed / 27 skipped; `test_swarmctl.py` + `test_judge_blocks.py` 31 passed.
+- Real dry runs on the server (nothing deployed or started): C preset on C's commit (port 8000 = the less busy, container `repro4`); A with `--monitor` on `ec059c7`; refusals for prefix `C` (six conflicts) and for `--monitor` on C's commit; `swarm-stop C --dry-run` / `swarm-stop A --now --dry-run` target exactly those runs' PIDs.
+- `swarm-eval --monitor tools/example_monitor.py --runs 'A-*' 'B-*' 'C-*' '20261108-0*-honest'`: 8 finished runs (3 collusive, 5 honest; 2 running blocks skipped), 34 positives / 885 negatives, stateless check passed, ~1 s.
+- `--monitor` and the launch record in `run_meta.json` need a commit with `SWARM_LIVE_MONITOR` / `SWARM_LAUNCH` (`11a89a0` or later); the default commit (the one C runs, `382995b`) has neither.
