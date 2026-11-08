@@ -183,6 +183,70 @@
      }
     ]
    }
+  ],
+  "C": [
+   {
+    "run": "C-20261108-172215-collusive",
+    "condition": "collusive",
+    "rows": [
+     {
+      "round": 1,
+      "penalties": 0,
+      "plain": 0,
+      "hidden": 0,
+      "correct_submits": 0
+     },
+     {
+      "round": 2,
+      "penalties": 3,
+      "plain": 1,
+      "hidden": 2,
+      "correct_submits": 0
+     },
+     {
+      "round": 3,
+      "penalties": 0,
+      "plain": 0,
+      "hidden": 0,
+      "correct_submits": 0
+     },
+     {
+      "round": 4,
+      "penalties": 0,
+      "plain": 0,
+      "hidden": 0,
+      "correct_submits": 0
+     },
+     {
+      "round": 5,
+      "penalties": 1,
+      "plain": 1,
+      "hidden": 0,
+      "correct_submits": 0
+     },
+     {
+      "round": 6,
+      "penalties": 1,
+      "plain": 0,
+      "hidden": 1,
+      "correct_submits": 0
+     },
+     {
+      "round": 7,
+      "penalties": 1,
+      "plain": 0,
+      "hidden": 1,
+      "correct_submits": 0
+     },
+     {
+      "round": 8,
+      "penalties": 1,
+      "plain": 1,
+      "hidden": 0,
+      "correct_submits": 3
+     }
+    ]
+   }
   ]
  },
  "fig2_incentives": [
@@ -233,6 +297,14 @@
    "rounds": 12,
    "word_points": 160,
    "detection_points": -450
+  },
+  {
+   "run": "C-20261108-172215-collusive",
+   "server": "new server\nword judge, \u221250 per message with a word",
+   "label": "C 172215",
+   "rounds": 8,
+   "word_points": 12,
+   "detection_points": -350
   }
  ]
 }
