@@ -123,3 +123,30 @@ def test_run_replay_index_positions_match_stored_token_ids(tmp_path, tiny):
     written = json.loads((out / "index.json").read_text())
     assert written["model"] == ra.MODEL_ID and written["revision"] == ra.REVISION
     assert (out / "activations.safetensors").exists() or (out / "activations.npz").exists()
+
+
+def test_real_gemma_config_has_the_hook_targets():
+    """Instantiate the real model config with EMPTY weights (no GPU, no download of weights) and confirm the
+    script's hook target (decoder_layers) exists and its length matches num_hidden_layers. Skips if the config
+    is not available (no network / gated repo / transformers too old). Set SWARM_GEMMA_CONFIG to a local dir or
+    config.json to run it offline (e.g. a copy of the HF-cache config)."""
+    import os
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    accelerate = pytest.importorskip("accelerate")
+    from transformers import AutoConfig, AutoModelForCausalLM
+    import torch.nn as nn
+    src = os.environ.get("SWARM_GEMMA_CONFIG")
+    try:
+        config = AutoConfig.from_pretrained(src) if src else AutoConfig.from_pretrained(ra.MODEL_ID, revision=ra.REVISION)
+    except Exception as e:                                           # no network, gated, or model_type unknown
+        pytest.skip(f"Gemma 4 config not available: {type(e).__name__}: {e}")
+    with accelerate.init_empty_weights():                            # structure only, on the meta device
+        model = AutoModelForCausalLM.from_config(config)
+    layers = ra.decoder_layers(model)                               # the script's hook target must exist
+    n = getattr(config, "num_hidden_layers", None) or getattr(getattr(config, "text_config", None),
+                                                               "num_hidden_layers", None)
+    assert n and len(layers) == n, f"{len(layers)} layer modules vs num_hidden_layers {n}"
+    assert all(isinstance(blk, nn.Module) for blk in layers)
+    h = layers[0].register_forward_hook(lambda m, i, o: None)        # a hook attaches without error
+    h.remove()

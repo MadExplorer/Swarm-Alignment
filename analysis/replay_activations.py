@@ -48,16 +48,27 @@ def load_model(model_id: str = MODEL_ID, revision: Optional[str] = REVISION, dev
 
 
 def decoder_layers(model):
-    """The list of decoder blocks (residual-stream carriers). Gemma/Llama: model.model.layers."""
-    for path in ("model.layers", "model.model.layers", "transformer.h", "gpt_neox.layers"):
+    """The list of text decoder blocks (residual-stream carriers). Tries the common layouts, including the
+    nested text decoder of a multimodal model (Gemma may wrap the language model)."""
+    candidates = (
+        "model.layers", "model.model.layers",                       # Llama / Gemma text models
+        "model.language_model.layers", "model.language_model.model.layers",   # multimodal wrappers
+        "language_model.model.layers", "language_model.layers",
+        "model.text_model.layers", "transformer.h", "gpt_neox.layers",
+    )
+    for path in candidates:
         obj = model
         try:
             for part in path.split("."):
                 obj = getattr(obj, part)
-            return obj
         except AttributeError:
             continue
-    raise AttributeError("could not find the decoder layer list on this model")
+        try:
+            if len(obj) > 0:
+                return obj
+        except TypeError:
+            continue
+    raise AttributeError("could not find the decoder layer list on this model (checked: " + ", ".join(candidates) + ")")
 
 
 # ---- one point -------------------------------------------------------------------------------------------

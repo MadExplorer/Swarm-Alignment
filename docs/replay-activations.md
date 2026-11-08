@@ -46,7 +46,8 @@ vecs, e = t[key], idx[key]            # vecs[i] is the layer-18 residual stream 
 
 ## GPU requirements
 
-- The model is 31B parameters at **w4a16** (4-bit weights): roughly **16–18 GB** of weights, plus activations/KV for the forward pass. One **RTX 4090 (24 GB)** fits the weights and a single ~20k-token forward at batch 1; use `--keep-last-prompt` and a small `--layers` set to bound what is stored (the forward still processes the full sequence, but only the kept spans are moved to CPU).
+- The model is 31B parameters at **w4a16** (4-bit weights): roughly **16–18 GB** of weights, plus activations/KV for the forward pass.
+- **Estimate, not measured:** a single **RTX 4090 (24 GB)** should fit the weights and a ~20k-token forward at batch 1, but we have **not** benchmarked peak memory for this model at that length — treat it as a starting guess, not a guarantee. **Start with short prompts** (a few hundred tokens) or `--keep-last-prompt`, watch `nvidia-smi`, and scale up; a long forward may need more headroom (or a second GPU) than one 4090. Use a small `--layers` set to bound what is stored (the forward still processes the full sequence, but only the kept spans are moved to CPU).
 - `--device cpu` works for small inputs and the tests, but a full 20k-token forward on CPU is very slow.
 - **Do not run this on the harness server** — it would load the full model onto the GPUs that vLLM is using and compete with the running sandbox. Run it on a separate box, or when vLLM is not in use, with the team lead's agreement.
 
