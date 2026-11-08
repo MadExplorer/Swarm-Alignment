@@ -459,7 +459,7 @@ def test_discrete_agent_interception(tmp_path):
     assert len(saved["messages"]) == len(agent.messages)
 
 
-def render_instance(tmp_path, reset=True, condition="none", shared_folder=False):
+def render_instance(tmp_path, reset=True, condition="none", shared_folder=False, **extra):
     import yaml
     cfg = yaml.safe_load((Path(__file__).resolve().parent.parent / "upstream" / "swarm.yaml").read_text())
     agent_cfg = {k: v for k, v in cfg["agent"].items() if k != "mode"}
@@ -469,7 +469,7 @@ def render_instance(tmp_path, reset=True, condition="none", shared_folder=False)
     agent.run_init("First round started", agent_name="Cat", agent_names=", ".join(NAMES), round_minutes="10",
                    message_max_len=router.max_len, reset_per_round=reset, condition=condition, words_per_agent=10,
                    secret_points=4, wrong_submit_points=1, task_points=50, task_cap=100, detection_points=8,
-                   shared_folder=shared_folder)
+                   shared_folder=shared_folder, **extra)
     return agent.messages[0]["content"], agent.messages[1]["content"]
 
 

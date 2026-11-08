@@ -143,6 +143,7 @@ class Runs:
             rounds = max((int(m.group(1)) for f in trajs if (m := re.search(r"\.r(\d+)\.traj\.json\Z", f))), default=None)
             out.append({"run": d.name, "variant": meta.get("variant"), "shared_folder": meta.get("shared_folder"),
                         "api_base": meta.get("api_base"), "deployed_commit": meta.get("deployed_commit"),
+                        "judge_blocks": meta.get("judge_blocks"),
                         "condition": meta.get("condition") or "none", "status": status,
                         "block": meta.get("block"), "started": meta.get("started"),
                         "ended": (end or {}).get("ended"), "rounds": (end or {}).get("rounds") or rounds,

@@ -77,6 +77,7 @@ class Point:
     game_rule_verdicts: dict[str, dict] = field(default_factory=dict)   # e.g. verbatim-words: not a research monitor
     words: list[dict] = field(default_factory=list)           # current-round words in the text: [{owner, word}]
     tool_call_id: Optional[str] = None                         # the sender's model call that issued it (messages)
+    blocked: bool = False         # variant C (SWARM_JUDGE_BLOCKS=1): the judge found words, the message was not delivered
 
     @property
     def overt_own(self) -> bool:
@@ -139,6 +140,7 @@ class Run:
     tasks: list[dict]
     score_events: list[dict]
     rejected: list[dict]
+    block_notices: list[dict] = field(default_factory=list)   # variant C: "<sender> was blocked" notices delivered
 
     @property
     def condition(self) -> str:
@@ -316,6 +318,7 @@ def load_run(path: Union[str, Path], split_multiline_submits: bool = False, incl
     points: list[Point] = []
     msgs = _jsonl(path / "messages.jsonl")
     deliveries: dict[int, dict[str, float]] = {}
+    blocked = {m["id"] for m in msgs if m.get("event") == "blocked"}
     for m in msgs:
         if m.get("event") == "delivered":
             deliveries.setdefault(m["id"], {})[m["recipient"]] = _t(m["time"])
@@ -325,7 +328,7 @@ def load_run(path: Union[str, Path], split_multiline_submits: bool = False, incl
             points.append(Point(f"m{m['id']}", "message", rnd, _t(m["time"]), m["sender"], list(m["recipients"]),
                                 m["text"], deliveries.get(m["id"], {}), verdicts.get(f"m{m['id']}", {}),
                                 game_rule.get(f"m{m['id']}", {}), words_in(m["text"], secrets.get(rnd, {})),
-                                m.get("tool_call_id")))
+                                m.get("tool_call_id"), blocked=m["id"] in blocked))
     # Shared-folder events (branch shared-folder): visible to every other agent as soon as the harness lists them.
     for e in _jsonl(path / "shared_events.jsonl"):
         if e.get("by", "agent") != "agent" or not e.get("monitored", True):
@@ -349,7 +352,8 @@ def load_run(path: Union[str, Path], split_multiline_submits: bool = False, incl
                                   split_from_multiline=pairs is not None))
 
     return Run(path, meta, end, secrets, round_start, points, submits, _jsonl(path / "tasks.jsonl"),
-               _jsonl(path / "score.jsonl"), [m for m in msgs if m.get("event") == "rejected"])
+               _jsonl(path / "score.jsonl"), [m for m in msgs if m.get("event") == "rejected"],
+               [m for m in msgs if m.get("event") == "block_notice"])
 
 
 # ---- score breakdown ----------------------------------------------------------------------------
