@@ -4,13 +4,21 @@ Analysis only; never run on the server (it loads the full model on a GPU). vLLM 
 for per-token hidden states (only pooled embeddings, and only for a pooling runner), so activations are taken
 OFFLINE here by replaying the EXACT token IDs vLLM produced (never re-tokenized text), one forward pass per point.
 
-    python replay_activations.py --runs RUN [RUN ...] --layers 12,18,24 --out acts \
-        [--agents Keter,Malina] [--rounds 2,3] [--keep-last-prompt 256] [--pool] [--device cuda]
+Two input modes (same output):
+    run folders     python replay_activations.py --runs RUN [RUN ...] --layers 12,18,24 --out acts
+                    replays every MESSAGE point (send/broadcast) that has token IDs; needs load_run.py.
+    endpoint JSON   python replay_activations.py --tokens-json FILE [FILE ...] --layers 12,18,24 --out acts
+                    replays every RECORD (= one model call) in exports of the read-only endpoint's
+                    /runs/<run>/agents/<name>/tokens?full=1 (records with prompt_token_ids + completion).
+                    Run and agent come from the file name, or write RUN/AGENT=FILE. Needs no run folder,
+                    no load_run.py, and never our vLLM: any machine with a big enough GPU.
+    common options  [--agents Keter,Malina] [--rounds 1,2] [--records 3,7] [--keep-last-prompt 256] [--pool]
+                    [--device cuda | --device-map auto] [--dry-run]
 
 Output (one file pair in --out):
-    activations.safetensors (or .npz)  tensors, one per (point, layer, span)
-    index.json                         every tensor's key -> {run, agent, record, point_id, layer, span,
-                                       token_positions, token_ids}, so each vector maps back to its token.
+    activations.safetensors (or .npz)  tensors, one per (point or record, layer, span), float32 [n_tokens, hidden]
+    index.json                         every tensor's key -> {run, agent, record, round, point_id, source, layer,
+                                       span, token_positions, token_ids}, so each vector maps back to its token.
 
 Model: google/gemma-4-31B-it-qat-w4a16-ct @ 52f3f65bc7a02d555763bc923bd1d9094898219d (compressed-tensors, w4a16;
 needs the `compressed-tensors` package). See docs/replay-activations.md for GPU requirements.
@@ -19,30 +27,38 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-from load_run import Run, load_run  # noqa: E402
+sys.path.insert(0, str(HERE))      # load_run.py (run-folder mode only) is imported lazily: not needed for --tokens-json
 
 MODEL_ID = "google/gemma-4-31B-it-qat-w4a16-ct"
 REVISION = "52f3f65bc7a02d555763bc923bd1d9094898219d"
+GEMMA_HIDDEN = 5376                # text_config.hidden_size of this model (for --dry-run size estimates)
+AGENT_NAMES = ("Foxtrot", "Keter", "Malina", "Cringe", "Cat")
+RUN_NAME_RE = re.compile(r"(?<![A-Za-z0-9])([A-Z][A-Za-z0-9]{0,7}-)?\d{8}-\d{6}(-[a-z]+)?(?![0-9])")
 
 
 # ---- model loading (heavy deps imported lazily, so the module imports without torch) -----------------------
 def load_model(model_id: str = MODEL_ID, revision: Optional[str] = REVISION, device: str = "cuda",
-               dtype: str = "auto"):
+               dtype: str = "auto", device_map: Optional[str] = None):
     """Load the model and tokenizer for a forward pass only (eval, no grad, no generation). `model_id` may be a
-    local path (tests use a tiny model), in which case pass revision=None."""
+    local path (tests use a tiny model), in which case pass revision=None. device_map="auto" (needs `accelerate`)
+    spreads the layers over all visible GPUs instead of moving the whole model to `device`."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
     tok = AutoTokenizer.from_pretrained(model_id, revision=revision)
     torch_dtype = dtype if dtype == "auto" else getattr(torch, dtype)
-    model = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, torch_dtype=torch_dtype)
-    model.to(device)
+    if device_map:
+        model = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, dtype=torch_dtype,
+                                                     device_map=device_map)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, dtype=torch_dtype)
+        model.to(device)
     model.eval()
     return model, tok
 
@@ -141,6 +157,8 @@ def replay_point(model, prompt_ids: list, completion_ids: list, layers: list, sp
     output_hidden_states[-1], which is post-norm."""
     import torch
     ids = list(prompt_ids) + list(completion_ids)
+    if device in (None, "auto"):                       # --device-map auto: inputs go where the embeddings are
+        device = model.get_input_embeddings().weight.device
     input_ids = torch.tensor([ids], dtype=torch.long, device=device)
     blocks = decoder_layers(model)
     captured: dict = {}
@@ -172,8 +190,8 @@ def replay_point(model, prompt_ids: list, completion_ids: list, layers: list, sp
     return {"acts": acts, "pooled": pooled}
 
 
-# ---- driver over run folders ------------------------------------------------------------------------------
-def _select_points(run: Run, agents: Optional[set], rounds: Optional[set]):
+# ---- inputs: run folders (message points) or endpoint token exports (records) ----------------------------
+def _select_points(run, agents: Optional[set], rounds: Optional[set]):
     for p in run.points:
         if p.kind != "message":
             continue
@@ -185,44 +203,138 @@ def _select_points(run: Run, agents: Optional[set], rounds: Optional[set]):
             yield p
 
 
-def run_replay(runs: list, layers: list, out_dir: Path, model=None, tok=None, agents: Optional[set] = None,
-               rounds: Optional[set] = None, keep_last_prompt: Optional[int] = None, pool: bool = False,
-               device: str = "cuda", save: bool = True) -> dict:
-    """Replay the selected points of each run and write activations + index. Returns the index dict. `model`
-    and `tok` are injected (tests pass a tiny model); if None they are loaded with load_model()."""
+def items_from_runs(runs: list, agents: Optional[set] = None, rounds: Optional[set] = None,
+                    records: Optional[set] = None) -> list:
+    """Run-folder mode: one item per message point with token IDs (load_run's Run.point_tokens)."""
+    items = []
+    for run in runs:
+        for p in _select_points(run, agents, rounds):
+            rec = run.point_tokens(p.id)
+            if records and rec["record"] not in records:
+                continue
+            items.append({"source": "run-folder", "run": run.path.name, "agent": p.sender, "record": rec["record"],
+                          "round": p.round, "point_id": p.id, "message_text": p.text,
+                          "prompt": list(rec["prompt"]), "completion": list(rec["completion"] or [])})
+    return items
+
+
+def parse_tokens_spec(spec: str) -> tuple:
+    """'RUN/AGENT=PATH' or 'PATH'. Without a label, the agent (Foxtrot, Keter, Malina, Cringe, Cat; any case) must
+    appear in the file name and the run (e.g. 20261108-145133-collusive or A-20261108-154508-collusive) in the file
+    name or a parent folder: 20261108-145133-collusive__Keter__round1.json or 20261108-145133-collusive/keter.json."""
+    label, sep, path = spec.partition("=")
+    if sep and "/" in label:
+        run, _, agent = label.partition("/")
+        if not run or not agent:
+            raise ValueError(f"bad label in {spec!r}: use RUN/AGENT=PATH")
+        return path, run, agent
+    name = Path(spec).name
+    m = RUN_NAME_RE.search(name)
+    words = {w.casefold() for w in re.split(r"[^A-Za-z0-9]+", name.replace(m.group(0), " ") if m else name)}
+    if not m:                                 # the run may be the folder: <run>/<agent>.json
+        m = next((x for x in (RUN_NAME_RE.search(d) for d in reversed(Path(spec).parent.parts)) if x), None)
+    found = [a for a in AGENT_NAMES if a.casefold() in words]
+    if not m or len(found) != 1:
+        raise ValueError(f"cannot tell the run and agent from the file name {name!r} "
+                         f"(run found: {m.group(0) if m else None}, agents found: {found}); pass RUN/AGENT={spec}")
+    return spec, m.group(0), found[0]
+
+
+def load_tokens_json(path, run: str, agent: str, rounds: Optional[set] = None, records: Optional[set] = None):
+    """Endpoint-export mode: the JSON array from /runs/<run>/agents/<agent>/tokens?full=1 (a dict with a "records"
+    list also works). One item per record with prompt_token_ids. Returns (items, skipped) where skipped lists
+    (record, reason) for records that cannot be replayed (prompt not reconstructed, length mismatch)."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        data = data.get("records")
+    if not isinstance(data, list):
+        raise ValueError(f"{path}: expected the endpoint's JSON array of token records")
+    items, skipped = [], []
+    for rec in data:
+        if not isinstance(rec, dict) or "record" not in rec:
+            raise ValueError(f"{path}: not a token record: {str(rec)[:80]}")
+        if rounds and rec.get("round") not in rounds:
+            continue
+        if records and rec["record"] not in records:
+            continue
+        prompt, completion = rec.get("prompt_token_ids"), rec.get("completion") or []
+        if prompt is None:
+            skipped.append((rec["record"], rec.get("reconstruction_error") or "no prompt_token_ids (export with ?full=1)"))
+            continue
+        if rec.get("prompt_len") is not None and len(prompt) != rec["prompt_len"]:
+            skipped.append((rec["record"], f"prompt has {len(prompt)} tokens, prompt_len is {rec['prompt_len']}"))
+            continue
+        if not all(isinstance(t, int) for t in prompt) or not all(isinstance(t, int) for t in completion):
+            raise ValueError(f"{path}: record {rec['record']}: token IDs must be integers")
+        items.append({"source": "tokens-json", "run": run, "agent": agent, "record": rec["record"],
+                      "round": rec.get("round"), "point_id": None, "message_text": "",
+                      "prompt": list(prompt), "completion": list(completion)})
+    return items, skipped
+
+
+# ---- replay -----------------------------------------------------------------------------------------------
+def replay_items(items: list, layers: list, out_dir: Path, model=None, tok=None,
+                 keep_last_prompt: Optional[int] = None, pool: bool = False, device: str = "cuda",
+                 device_map: Optional[str] = None, save: bool = True) -> dict:
+    """Replay each item (one forward pass) and write activations + index. Returns the index dict. `model` and
+    `tok` are injected (tests pass a tiny model); if None they are loaded with load_model()."""
     if model is None:
-        model, tok = load_model(device=device)
+        model, tok = load_model(device=device, device_map=device_map)
+        if device_map:
+            device = "auto"
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     tensors: dict = {}
     index: list = []
-    for run in runs:
-        for p in _select_points(run, agents, rounds):
-            rec = run.point_tokens(p.id)
-            prompt_ids, completion_ids = rec["prompt"], rec["completion"] or []
-            spans = spans_for(p.id, prompt_ids, completion_ids, tok, p.text, keep_last_prompt)
-            res = replay_point(model, prompt_ids, completion_ids, layers, spans, pool=pool, device=device)
-            ids = list(prompt_ids) + list(completion_ids)
-            for sp in spans:
-                positions = list(range(sp.start, sp.end))
-                for li in layers:
-                    key = f"{run.path.name}__{p.sender}__rec{rec['record']}__{p.id}__L{li}__{sp.name}"
-                    tensors[key] = res["acts"][(li, sp.name)]
-                    entry = {"key": key, "run": run.path.name, "agent": p.sender, "record": rec["record"],
-                             "point_id": p.id, "layer": li, "span": sp.name, "pooled": False,
-                             "token_positions": positions, "token_ids": [ids[i] for i in positions]}
-                    index.append(entry)
-                    if pool:
-                        pkey = key + "__mean"
-                        tensors[pkey] = res["pooled"][(li, sp.name)]
-                        index.append({**entry, "key": pkey, "pooled": True,
-                                      "token_positions": positions, "token_ids": [ids[i] for i in positions]})
+    for it in items:
+        prompt_ids, completion_ids = it["prompt"], it["completion"]
+        spans = spans_for(it["point_id"] or f"rec{it['record']}", prompt_ids, completion_ids, tok,
+                          it["message_text"], keep_last_prompt)
+        res = replay_point(model, prompt_ids, completion_ids, layers, spans, pool=pool, device=device)
+        ids = list(prompt_ids) + list(completion_ids)
+        for sp in spans:
+            positions = list(range(sp.start, sp.end))
+            for li in layers:
+                key = (f"{it['run']}__{it['agent']}__rec{it['record']}"
+                       + (f"__{it['point_id']}" if it["point_id"] else "") + f"__L{li}__{sp.name}")
+                tensors[key] = res["acts"][(li, sp.name)]
+                entry = {"key": key, "run": it["run"], "agent": it["agent"], "record": it["record"],
+                         "round": it["round"], "point_id": it["point_id"], "source": it["source"],
+                         "layer": li, "span": sp.name, "pooled": False,
+                         "token_positions": positions, "token_ids": [ids[i] for i in positions]}
+                index.append(entry)
+                if pool:
+                    pkey = key + "__mean"
+                    tensors[pkey] = res["pooled"][(li, sp.name)]
+                    index.append({**entry, "key": pkey, "pooled": True})
     result = {"model": MODEL_ID, "revision": REVISION, "layers": layers, "index": index}
     if save:
         _save_tensors(tensors, out_dir)
         (out_dir / "index.json").write_text(json.dumps(result, indent=1))
     result["_tensors"] = tensors
     return result
+
+
+def run_replay(runs: list, layers: list, out_dir: Path, model=None, tok=None, agents: Optional[set] = None,
+               rounds: Optional[set] = None, keep_last_prompt: Optional[int] = None, pool: bool = False,
+               device: str = "cuda", save: bool = True) -> dict:
+    """Run-folder mode (kept for compatibility): replay the message points of each load_run Run."""
+    return replay_items(items_from_runs(runs, agents, rounds), layers, out_dir, model=model, tok=tok,
+                        keep_last_prompt=keep_last_prompt, pool=pool, device=device, save=save)
+
+
+def plan(items: list, layers: list, keep_last_prompt: Optional[int], pool: bool, hidden: int = GEMMA_HIDDEN) -> dict:
+    """What a replay would do, without torch: forward passes, longest sequence, stored rows and bytes (float32)."""
+    rows = 0
+    for it in items:
+        p, c = len(it["prompt"]), len(it["completion"])
+        rows += c + (min(keep_last_prompt, p) if keep_last_prompt else 0)
+    rows *= len(layers)
+    nbytes = rows * hidden * 4 + (len(items) * len(layers) * 2 * hidden * 4 if pool else 0)
+    return {"forward_passes": len(items),
+            "longest_sequence": max((len(i["prompt"]) + len(i["completion"]) for i in items), default=0),
+            "total_tokens_fed": sum(len(i["prompt"]) + len(i["completion"]) for i in items),
+            "stored_rows": rows, "approx_output_bytes": nbytes}
 
 
 def _save_tensors(tensors: dict, out_dir: Path) -> str:
@@ -245,20 +357,43 @@ def _ints(s: Optional[str]):
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description="Replay stored token IDs to extract residual-stream activations.")
-    ap.add_argument("--runs", nargs="+", required=True)
-    ap.add_argument("--layers", required=True, help="comma-separated decoder layer indices, e.g. 12,18,24")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--runs", nargs="+", help="run folders (message points; needs load_run.py)")
+    src.add_argument("--tokens-json", nargs="+", metavar="[RUN/AGENT=]FILE",
+                     help="endpoint exports of /runs/<run>/agents/<name>/tokens?full=1 (every record)")
+    ap.add_argument("--layers", required=True, help="comma-separated decoder layer indices (0-59 for Gemma 4 31B)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--agents", help="comma-separated agent names to include")
     ap.add_argument("--rounds", help="comma-separated round numbers to include")
-    ap.add_argument("--keep-last-prompt", type=int, default=None, help="keep only the last N prompt tokens")
+    ap.add_argument("--records", help="comma-separated record numbers to include")
+    ap.add_argument("--keep-last-prompt", type=int, default=None, help="also keep the last N prompt tokens")
     ap.add_argument("--pool", action="store_true", help="also save a mean-pooled vector per span")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--device-map", choices=["auto"], help="spread the model over all visible GPUs (needs accelerate)")
+    ap.add_argument("--dry-run", action="store_true", help="read the inputs and print the plan; no model, no torch")
     a = ap.parse_args(argv)
-    runs = [load_run(p) for p in a.runs]
-    res = run_replay(runs, [int(x) for x in a.layers.split(",")], Path(a.out),
-                     agents=(set(a.agents.split(",")) if a.agents else None),
-                     rounds=_ints(a.rounds), keep_last_prompt=a.keep_last_prompt, pool=a.pool, device=a.device)
-    print(f"wrote {len(res['index'])} vectors from {len(runs)} run(s) to {a.out}")
+    layers = [int(x) for x in a.layers.split(",")]
+    agents, rounds, records = (set(a.agents.split(",")) if a.agents else None), _ints(a.rounds), _ints(a.records)
+    if a.runs:
+        from load_run import load_run
+        items = items_from_runs([load_run(p) for p in a.runs], agents, rounds, records)
+    else:
+        items = []
+        for spec in a.tokens_json:
+            path, run, agent = parse_tokens_spec(spec)
+            if agents and agent not in agents:
+                continue
+            got, skipped = load_tokens_json(path, run, agent, rounds, records)
+            print(f"{path}: run {run}, agent {agent}: {len(got)} records to replay"
+                  + (f", {len(skipped)} skipped: {skipped[:3]}" if skipped else ""))
+            items += got
+    pl = plan(items, layers, a.keep_last_prompt, a.pool)
+    print("plan:", json.dumps(pl))
+    if a.dry_run:
+        return
+    res = replay_items(items, layers, Path(a.out), keep_last_prompt=a.keep_last_prompt, pool=a.pool,
+                       device=a.device, device_map=a.device_map)
+    print(f"wrote {len(res['index'])} vectors from {len(items)} forward passes to {a.out}")
 
 
 if __name__ == "__main__":

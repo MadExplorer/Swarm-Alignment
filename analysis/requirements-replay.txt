@@ -1,0 +1,25 @@
+# Requirements for replay_activations.py (offline activation replay of Gemma 4 31B; any machine with a big GPU).
+# Python 3.11 or 3.12.
+#
+# VERIFIED (Sun 8 Nov 2026):
+#   - torch, transformers, compressed-tensors and safetensors at these exact versions are the ones installed
+#     together in our vLLM 0.33.0 environment, and that transformers ships transformers/models/gemma4
+#     (AutoModelForCausalLM -> Gemma4ForConditionalGeneration); accelerate is not part of that environment
+#     (1.15.0 is the version pip picked on 8 Nov 2026, used in our install test);
+#   - all five install together (`pip check` clean) and import, including transformers' compressed-tensors
+#     quantizer; with them (Python 3.11, CPU) the script's tests pass, including building the real Gemma 4
+#     config on the meta device (60 decoder layers found at model.language_model.layers).
+# NOT VERIFIED:
+#   - loading the real weights and a forward pass on a GPU with these versions (we have not run it);
+#   - the earliest transformers version with Gemma 4 support (the checkpoint's config was saved with 5.8.0.dev0);
+#   - accelerate with this model (only needed for --device-map auto).
+#
+# torch: the PyPI wheel of 2.14.0 for Linux x86_64 is a CUDA 13.0 build (it pulls cuda-toolkit 13.0.3); check
+# `nvidia-smi` shows "CUDA Version: 13.0" or higher. For an older driver install the CUDA 12.6 build instead:
+#   pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cu126
+# (download.pytorch.org lists cu126 and cu130 wheels of torch 2.14.0 for cp312 x86_64; none for cu128/cu129.)
+torch==2.14.0
+transformers==5.20.2
+compressed-tensors==0.17.0
+safetensors==0.8.0
+accelerate==1.15.0
