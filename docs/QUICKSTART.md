@@ -51,12 +51,12 @@ Game-rule monitors are excluded, and running blocks are skipped (`--include-runn
 ```bash
 swarm-run --variant C --prefix D --order collusive:8,honest:8 --dry-run   # check, print the command, change nothing
 swarm-run --variant C --prefix D --order collusive:8,honest:8             # start
-swarm-run --variant A --prefix E --monitor ~/lead_monitor.py --commit <sha-with-live-monitor>
+swarm-run --variant A --prefix E --monitor ~/lead_monitor.py
 ```
 
 **Variants:** **A** = shared folder on; **B** = shared folder off; **C** = the judge blocks messages that contain words and tells the swarm (shared folder off).
 
-**Defaults:** 300 s rounds (`--round-seconds`), the less busy vLLM port (`--port 8000|8001`), the commit variant C runs (`--commit`).
+**Defaults:** 300 s rounds (`--round-seconds`), the less busy vLLM port (`--port 8000|8001`), and the commit in `/root/repro/bin/DEFAULT_COMMIT` (`--commit`; currently `e5d81da`, which has the live monitor and the launch record).
 
 `--prefix` must be new. Run folders are named `<PREFIX>-<time>-<condition>`.
 
@@ -69,7 +69,7 @@ swarm-run --variant A --prefix E --monitor ~/lead_monitor.py --commit <sha-with-
 
 The run's settings are in each block's `run_meta.json`. With a commit that has `SWARM_LAUNCH`, the full launch record is there too.
 
-**`--monitor`** runs your monitor **live, observe only**. Its verdicts go to `monitor.jsonl`; it never changes the score, never blocks and never sees a submit. It needs a commit with `SWARM_LIVE_MONITOR`, which C's commit doesn't have.
+**`--monitor`** runs your monitor **live, observe only**. Its verdicts go to `monitor.jsonl`; it never changes the score, never blocks and never sees a submit. It needs a commit with `SWARM_LIVE_MONITOR`: the default has it, C's own commit `382995b` doesn't.
 
 Pause and resume: `echo true > /root/repro/stop-<PREFIX>` / `echo false > …`.
 

@@ -167,7 +167,7 @@ def plan_run(host: Host, a) -> dict:
         raise Refused(f"--port must be one of {PORTS}")
     if not host.vllm_ok(port):
         raise Refused(f"vLLM on port {port} is not healthy (/health)")
-    commit = a.commit or (host.root / "host-C-DEPLOYED_COMMIT").read_text().strip()
+    commit = a.commit or default_commit(host)
     try:
         sha = host.git("rev-parse", "--verify", f"{commit}^{{commit}}", text=True).stdout.strip()
     except subprocess.CalledProcessError:
@@ -210,6 +210,14 @@ def plan_run(host: Host, a) -> dict:
     return {"sha": sha, "code": code, "stop": stop, "console": console, "container": container, "port": port,
             "monitor": monitor, "launch": launch, "env": env, "command": cmd, "window": f"run{a.prefix}",
             "launch_in_run_meta": "SWARM_LAUNCH" in main_py}
+
+
+def default_commit(host: Host) -> str:
+    """/root/repro/bin/DEFAULT_COMMIT (set by the team), else the commit variant C runs."""
+    for f in (host.root / "bin" / "DEFAULT_COMMIT", host.root / "host-C-DEPLOYED_COMMIT"):
+        if host.exists(f):
+            return f.read_text().strip()
+    raise Refused("no --commit and no default (bin/DEFAULT_COMMIT or host-C-DEPLOYED_COMMIT)")
 
 
 def check_monitor_file(path: Path) -> dict:
@@ -269,7 +277,7 @@ def main_run(argv=None, host: Optional[Host] = None) -> int:
     ap.add_argument("--order", default="collusive:8,honest:8", help="blocks, e.g. collusive:8,honest:8")
     ap.add_argument("--round-seconds", type=float, default=300.0)
     ap.add_argument("--port", type=int, choices=PORTS, help="vLLM port (default: the one with fewer running runs)")
-    ap.add_argument("--commit", help="code to run (default: the commit variant C runs)")
+    ap.add_argument("--commit", help="code to run (default: /root/repro/bin/DEFAULT_COMMIT, else the commit C runs)")
     ap.add_argument("--monitor", help="your research monitor file, live and observe only (needs a recent --commit)")
     ap.add_argument("--dry-run", action="store_true", help="check and print the command; change nothing")
     a = ap.parse_args(argv)

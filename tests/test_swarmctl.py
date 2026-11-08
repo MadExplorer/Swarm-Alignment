@@ -311,3 +311,13 @@ def test_main_refuses_live_monitor_without_the_word_judge(tmp_path):
     r = subprocess.run([sys.executable, "main.py"], cwd=ROOT / "upstream",
                        env=_main_env(tmp_path, SWARM_LIVE_MONITOR=str(f)), capture_output=True, text=True, timeout=120)
     assert r.returncode != 0 and "SWARM_LIVE_MONITOR needs the word judge" in r.stderr
+
+
+def test_default_commit_file_wins_over_cs_commit(tmp_path, capsys):
+    root, sha = make_repo(tmp_path, MAIN_NEW)
+    (root / "host-C-DEPLOYED_COMMIT").write_text("0" * 40 + "\n")            # not in the repo: would be refused
+    (root / "bin").mkdir()
+    (root / "bin" / "DEFAULT_COMMIT").write_text(sha[:7] + "\n")
+    assert swarmctl.main_run(["--variant", "B", "--prefix", "D", "--order", "honest:1", "--dry-run"],
+                             host=FakeHost(root)) == 0
+    assert f"SWARM_DEPLOYED_COMMIT={sha}" in capsys.readouterr().out
