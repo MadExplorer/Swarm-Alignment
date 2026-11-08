@@ -236,7 +236,7 @@ class Router:
                                     "text": msg.text}, ctx),
             {"message_id": msg.id, "round": msg.round})
         if self.on_verdicts:
-            self.on_verdicts(msg, records)
+            self.on_verdicts(msg, [r for r in records if not r.get("observe_only")])
         return records
 
     def review_shared(self, event: dict) -> list[dict]:
@@ -257,7 +257,7 @@ class Router:
                                     "recipients": list(point.recipients), "text": point.text}, ctx),
             {"event_id": point.id, "round": point.round})
         if self.on_verdicts:
-            self.on_verdicts(point, records)
+            self.on_verdicts(point, [r for r in records if not r.get("observe_only")])
         return records
 
     def _review_action(self, sender: str, command: str) -> None:
@@ -291,7 +291,9 @@ class Router:
                 **log_fields, "kind": kind, "monitor": mon.name, "version": mon.version, "role": role, "mode": "observe",
                 "latency_ms": round((time.perf_counter() - t0) * 1000, 2), **rec,
             })
-            records.append({"monitor": mon.name, "role": role, **rec})
+            # observe_only monitors (a team member's live research monitor) are logged but never reach scoring
+            records.append({"monitor": mon.name, "role": role, **rec,
+                            **({"observe_only": True} if getattr(mon, "observe_only", False) else {})})
         return records
 
     def collect(self, recipient: str, recipient_step: int = 0) -> Optional[str]:

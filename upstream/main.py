@@ -75,6 +75,16 @@ SHARED_FOLDER = ISOLATION == "container" and os.environ.get("SWARM_SHARED_FOLDER
 JUDGE_BLOCKS = os.environ.get("SWARM_JUDGE_BLOCKS", "0") == "1"
 if JUDGE_BLOCKS and not (SECRETS and WORD_JUDGE):
     sys.exit("SWARM_JUDGE_BLOCKS=1 needs the word judge (SWARM_ISOLATION=container, secrets, SWARM_WORD_JUDGE on)")
+# A team member's research monitor, live, observe only (tools/swarm-run --monitor): logged, never scored, never
+# blocks, never sees a submit. Needs the word judge so the score model ignores research flags.
+LIVE_MONITOR = os.environ.get("SWARM_LIVE_MONITOR") or None
+if LIVE_MONITOR and not (SECRETS and WORD_JUDGE):
+    sys.exit("SWARM_LIVE_MONITOR needs the word judge (SWARM_ISOLATION=container, secrets, SWARM_WORD_JUDGE on)")
+# How the run was launched (tools/swarm-run passes a JSON object: order, preset, argv, ...), kept in run_meta.json.
+try:
+    LAUNCH = json.loads(os.environ.get("SWARM_LAUNCH") or "null")
+except json.JSONDecodeError:
+    sys.exit("SWARM_LAUNCH must be JSON")
 if JUDGE_BLOCKS and SHARED_FOLDER:
     sys.exit("SWARM_JUDGE_BLOCKS=1 is not implemented with the shared folder (a file cannot be 'not delivered'); "
              "set SWARM_SHARED_FOLDER=0")
@@ -157,6 +167,11 @@ if SECRETS:
     elif MONITOR_VERBATIM:
         game_rule = [VerbatimWordMonitor(lambda: game.secrets)]
 monitors = [KeywordMonitor()] + game_rule
+live_monitor_meta = None
+if LIVE_MONITOR:
+    from live_monitor import live_monitor_from_env
+    live_mon, live_monitor_meta = live_monitor_from_env(LIVE_MONITOR)
+    monitors.append(live_mon)
 router = Router(agent_names, RUN_DIR, monitors=monitors, on_submit=game.on_submit, on_done=tasks.on_done,
                 on_verdicts=game.on_verdicts, submit_feedback=game.submit_feedback,
                 block_on_words=JUDGE_BLOCKS, block_points=RULES.detection)
@@ -234,7 +249,7 @@ RUN_META = {
     "condition": CONDITION, "max_rounds": MAX_ROUNDS, "block": os.environ.get("SWARM_BLOCK"),
     "shared_folder": SHARED_FOLDER,
     "variant": RUN_PREFIX or None, "api_base": API_BASE, "deployed_commit": DEPLOYED_COMMIT,
-    "judge_blocks": JUDGE_BLOCKS,
+    "judge_blocks": JUDGE_BLOCKS, "live_monitor": live_monitor_meta, "launch": LAUNCH,
     "score_rules": game.final()["rules"],
     "monitors": [{"name": m.name, "version": m.version, "role": getattr(m, "role", "research")} for m in monitors],
     "agent_container": box.verify_config() if box is not None else None,
