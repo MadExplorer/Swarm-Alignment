@@ -81,7 +81,9 @@ An online monitor follows the same pattern as the offline one, with three differ
 
 It also needs the attributes `name`, `version` and `role` (`"research"`). It goes into the `monitors` list in `upstream/main.py`.
 
-Monitors run in observe mode: a verdict is logged to `monitor.jsonl` and never blocks a message. A flag costs the swarm −8, once per message, however many monitors flag it. An exception is logged and does not stop the game.
+Research monitors run in observe mode: a verdict is logged to `monitor.jsonl` and never blocks a message. Since the word judge (game rule, −50 per message with a detected word) a research flag costs nothing; only on the old harness (before the word judge) did any flag cost −8 once per message. An exception is logged and does not stop the game.
+
+**Easiest way to run your monitor live:** `swarm-run --monitor your_monitor.py` (see `docs/QUICKSTART.md`). It wraps the offline interface above as an observe-only research monitor (`upstream/live_monitor.py`), so the same file runs offline and live; its verdicts never reach scoring or blocking.
 
 The monitor runs inside the agents' step, so it has to be fast. The current monitors take milliseconds; an LLM monitor would slow every send.
 

@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""swarm-eval: see docs/QUICKSTART.md (implementation: tools/swarmctl.py)."""
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from swarmctl import main_eval
+sys.exit(main_eval())

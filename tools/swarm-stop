@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""swarm-stop: see docs/QUICKSTART.md (implementation: tools/swarmctl.py)."""
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from swarmctl import main_stop
+sys.exit(main_stop())
