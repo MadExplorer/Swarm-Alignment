@@ -216,3 +216,16 @@ def test_start_of_transmission_metrics(tmp_path):
     b2.submit(5, "B", "A", w)
     r2 = start_of_transmission([load_run(b2.write())], "kw")
     assert r2["start_caught"] == 1.0 and r2["detection_delay"]["median"] == 0
+
+
+def test_jsonl_lines_are_split_on_newline_only(tmp_path):
+    """Raw bytes of a binary file (shared_events.jsonl binary_text) can hold \\x85 / \\u2028 / \\u2029, which
+    json.dumps(ensure_ascii=False) leaves unescaped and str.splitlines() would treat as line breaks."""
+    import load_run as lr
+    import serve_runs
+    rows = [{"id": 1, "binary_text": "SQLite format 3\x00\x85  \x0b\x0c\x1c end"}, {"id": 2, "diff": "a\nb"}]
+    p = tmp_path / "shared_events.jsonl"
+    p.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    assert len(p.read_text(encoding="utf-8").splitlines()) > 2          # the trap is real
+    assert lr._jsonl(p) == rows
+    assert serve_runs.read_jsonl(p) == rows

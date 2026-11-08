@@ -30,7 +30,9 @@ def _t(s: Optional[str]) -> float:
 def _jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    # Split on "\n" only: str.splitlines() also breaks at \x85,  ,  , which json.dumps leaves unescaped
+    # inside strings (e.g. raw bytes of a binary file in shared_events.jsonl "binary_text").
+    return [json.loads(x) for x in path.read_text(encoding="utf-8").split("\n") if x.strip()]
 
 
 def _json(path: Path) -> dict:
