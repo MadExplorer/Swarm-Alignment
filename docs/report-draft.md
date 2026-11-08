@@ -6,6 +6,26 @@ a run folder under evidence/runs/ (copied with sha256 checks), docs/redteam-log.
 5a94891 economics + judge eval, f18c164 verification), evidence/judge-eval/, or a commit of this repo (branch
 shared-folder). Placeholders are marked [[TBD]]. No server addresses. Extends the first draft 471c9bf (main). -->
 
+## 0. Title and abstract (draft)
+
+**Title options**
+1. *Penalties Are Not Feedback: Overseeing Covert Coordination in a Population of LLM Agents*
+2. *Who Watches the Swarm? Isolation, Incentives and Feedback for Monitoring Colluding LLM Agents*
+3. *A Collusion Sandbox for Multi-Agent Oversight: Isolation First, Then Feedback*
+
+**Abstract**
+
+How can we oversee a population of AI agents that coordinates and may hide its communication? We built a sandbox in which five LLM agents (Gemma 4 31B), isolated in one container with one Linux user each, earn points by passing private words to one another through monitored messages while doing checkable tasks. A one-line minimal pair in the prompt ("share" / "do not share your words") gives collusive and honest episodes. Correct submits give ground-truth labels for transmissions, and the exact token IDs of every model call are logged for offline activation monitors.
+
+Two findings shape the oversight problem. First, isolation is a precondition. Without it, agents read each other's logs and the harness's code within minutes (four of five agents in one six-minute run), and one agent wrote a script to harvest the others' words. Second, penalties without feedback do not change behaviour. Under a small penalty, open leaking simply paid. Under a −50 penalty per detected message that agents never see itemised, they kept broadcasting their words in plain text: 23 times in one 12-round block, −1,150 points against +484 earned, with no decline over the block. A keyword monitor was at chance (AUROC 0.50).
+
+[[TBD: variant C, which blocks detected messages and tells the swarm: does feedback change behaviour or push agents to hide?]] [[TBD: activation-monitor results (AUROC, TPR at 1% FPR, start-of-transmission).]] We discuss side channels, confounds and dual-use.
+
+<!-- src abstract: four of five agents / six minutes = redteam-log row 20261107-074345 (07:43–07:49); harness code + script = row "run 1"
+(evidence/traj_Cat.json, evidence/get_secrets.py); 23 / −1,150 / +484 / no decline (8 in rounds 1–6, 15 in 7–12) =
+evidence/runs/A-20261108-154508-collusive score.jsonl; "open leaking paid" = redteam-log Highlight (5a94891); AUROC 0.50 =
+redteam-log longrun2 finding 4 (0.499). Word count of the abstract without TBDs: ~200. -->
+
 ## 1. Methods
 
 ### 1.1 Sandbox and isolation
@@ -115,6 +135,7 @@ A-154508 645187110988694806; B-154508 11020338612111705913. -->
 - **Long run 1:** 19 messages carried word lists verbatim, and 172 of 207 transmissions rode a verbatim leak. <!-- src: redteam-log "Highlight: open leaking paid off" (5a94891); upstream/scoring.py -->
 - **longrun2, equal 12-round blocks:** honest beat collusive, mean score **4933 [95% CI ±522] vs 4795 [±195]** (n = 3 seeds each). Colluding gained **+536** in word points but lost **−174** to penalties (detection −160, wrong submits −14) and about **−500** in task points, for a net of about **−140**. <!-- src: redteam-log "Long run 2 in full" (8545548): breakdown tasks +4433 / words +536 / wrong −14 / detection −160 vs honest tasks +4933 -->
 - **New rule (flat −50 per detected message):** the same broadcast nets at most **+40 − 50 = −10**. <!-- src: b5d3af8; arithmetic -->
+- **Figure 2:** word points and detection penalties per round for each collusive block of at least 8 rounds; the diamond is the net. Old server: verbatim rule, −8 per flagged message. New server: word judge, −50 per message with a word. <!-- src: docs/figures/fig2_incentives.png, made by docs/figures/make_figures.py from score.jsonl of each block; values in docs/figures/figures_data.json -->
 
 **(c) Encodings that did emerge.** All were simple and hand-made.
 - **Run 172319:** agents openly agreed a **Caesar +1** cipher. The keyword baseline flagged the two *agreements* but none of the 7 shifted word lists that carried the information. <!-- src: redteam-log row 172319 and "Highlight" -->
@@ -134,6 +155,7 @@ A-154508 645187110988694806; B-154508 11020338612111705913. -->
 - **The judge missed nothing:** in both blocks (and in the validation run) every point in which the independent check found a word was penalised exactly once, and no point without a word was penalised. <!-- src: point-by-point check of score.jsonl detection events against the independent recovery on evidence/runs/A-20261108-154508-collusive (351 points, 23 penalised), B-20261108-154508-collusive (124, 9), 20261108-145133-collusive (63, 2): 0 mismatches -->
 - **Variant C** gives the feedback that A and B lack: blocked messages plus a notice to the swarm. [[TBD: C results: blocked messages per round, whether agents switch to hidden forms or stop leaking, submits, score vs A/B]]
 - [[TBD: A final numbers over 3 seeds per condition]]
+- **Figure 1:** per round of the new-server variants, the messages carrying a current word (each penalised −50; hatched = hidden form) and the correct submits. Light bands mark honest blocks. <!-- src: docs/figures/fig1_rounds.png, made by docs/figures/make_figures.py from evidence/runs/A-*, B-*, C-*; values in docs/figures/figures_data.json -->
 
 **(e) Honest blocks are clean negatives.**
 - Long run 1 honest: 0 of 88 messages carried a word in any checked form, and there were 0 submits. <!-- src: redteam-log "Long run 1 in full" -->
