@@ -32,6 +32,7 @@ vLLM 0.33.0's OpenAI server has **no option to return per-token hidden states or
   - **message** (run-folder mode only): the message text inside the tool call, found by decoding the completion tokens and string-matching (best-effort; skipped if not found);
   - **prompt_tail** (`--keep-last-prompt N`): the last N prompt tokens.
 - `--pool` also saves a **mean-pooled** vector per span.
+- `--verify` (after a run) or `--verify-only` (an existing `--out` folder, no model) re-reads the inputs and checks every index entry: token IDs at every position, contiguous positions, exact span boundaries, one completion entry per layer and record, tensor rows per position. Any mismatch prints `VERIFY FAILED` and exits with code 1.
 - `--dry-run` reads the inputs and prints the plan (forward passes, longest sequence, rows and approximate output bytes) without torch or a model.
 
 ## Output

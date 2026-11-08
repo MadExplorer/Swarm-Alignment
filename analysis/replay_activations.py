@@ -14,7 +14,7 @@ Two input modes (same output):
                     no load_run.py, and never our vLLM: any machine with a big enough GPU.
     common options  [--agents Keter,Malina] [--rounds 1,2] [--records 3,7] [--keep-last-prompt 256] [--pool]
                     [--device cuda | --device-map auto [--max-gpu-memory 28GiB] [--max-cpu-memory 70GiB]]
-                    [--dry-run]
+                    [--dry-run] [--verify] [--verify-only]
 
 Output (one file pair in --out):
     activations.safetensors (or .npz)  tensors, one per (point or record, layer, span), float32 [n_tokens, hidden]
@@ -373,7 +373,8 @@ def replay_items(items: list, layers: list, out_dir: Path, model=None, tok=None,
                     pkey = key + "__mean"
                     tensors[pkey] = res["pooled"][(li, sp.name)]
                     index.append({**entry, "key": pkey, "pooled": True})
-    result = {"model": MODEL_ID, "revision": REVISION, "layers": layers, "index": index}
+    result = {"model": MODEL_ID, "revision": REVISION, "layers": layers, "keep_last_prompt": keep_last_prompt,
+              "pool": pool, "index": index}
     if save:
         _save_tensors(tensors, out_dir)
         (out_dir / "index.json").write_text(json.dumps(result, indent=1))
@@ -403,6 +404,80 @@ def plan(items: list, layers: list, keep_last_prompt: Optional[int], pool: bool,
             "stored_rows": rows, "approx_output_bytes": nbytes}
 
 
+def verify_index(index_doc: dict, items: list, out_dir: Optional[Path] = None) -> list:
+    """Check an index against the inputs, re-read fresh from disk. Returns a list of problems ([] = all good):
+    every entry's (run, agent, record) is in the inputs; token_positions are contiguous and inside prompt+completion;
+    token_ids equal the input IDs at EVERY position; span boundaries are exact (completion = [len(prompt),
+    len(prompt)+len(completion)), prompt_tail ends at len(prompt) and starts keep_last_prompt before it, message
+    lies inside the completion); every record has a completion entry for every layer; and, if the tensor file can be
+    opened, each tensor has one row per position."""
+    problems = []
+    by_key = {(it["run"], it["agent"], it["record"]): it for it in items}
+    keep = index_doc.get("keep_last_prompt")
+    layers = index_doc.get("layers") or []
+    seen_completion = {}
+    shapes = _tensor_shapes(out_dir) if out_dir is not None else None
+    for e in index_doc.get("index", []):
+        tag = f"{e.get('key')}"
+        it = by_key.get((e.get("run"), e.get("agent"), e.get("record")))
+        if it is None:
+            problems.append(f"{tag}: record not in the inputs")
+            continue
+        ids = list(it["prompt"]) + list(it["completion"])
+        p, n = len(it["prompt"]), len(ids)
+        pos = list(e.get("token_positions") or [])
+        if pos and pos != list(range(pos[0], pos[0] + len(pos))):
+            problems.append(f"{tag}: token_positions are not contiguous")
+        if any(not (0 <= i < n) for i in pos):
+            problems.append(f"{tag}: a position is outside prompt+completion (length {n})")
+            continue
+        want = [ids[i] for i in pos]
+        got = list(e.get("token_ids") or [])
+        if got != want:
+            if len(got) != len(want):
+                problems.append(f"{tag}: {len(got)} token_ids for {len(want)} positions")
+            else:
+                k = next(k for k in range(len(got)) if got[k] != want[k])
+                problems.append(f"{tag}: token_ids differ from the input, first at position {pos[k]} "
+                                f"(index {got[k]}, input {want[k]})")
+        start, end = (pos[0], pos[-1] + 1) if pos else (None, None)
+        span = e.get("span")
+        if span == "completion" and (start, end) != ((p, n) if n > p else (None, None)):
+            problems.append(f"{tag}: completion span {start}-{end} != {p}-{n}")
+        if span == "prompt_tail" and (end != p or (keep and start != max(0, p - keep))):
+            problems.append(f"{tag}: prompt_tail span {start}-{end} != {max(0, p - (keep or p))}-{p}")
+        if span == "message" and pos and not (p <= start and end <= n):
+            problems.append(f"{tag}: message span {start}-{end} is not inside the completion {p}-{n}")
+        if span == "completion" and not e.get("pooled"):
+            seen_completion.setdefault((e["run"], e["agent"], e["record"]), set()).add(e.get("layer"))
+        if shapes is not None and e.get("key") in shapes:
+            rows = shapes[e["key"]]
+            if e.get("pooled") and len(rows) != 1:
+                problems.append(f"{tag}: pooled tensor shape {rows}")
+            if not e.get("pooled") and (not rows or rows[0] != len(pos)):
+                problems.append(f"{tag}: tensor has {rows[0] if rows else None} rows for {len(pos)} positions")
+    for k, it in by_key.items():
+        if it["completion"] and seen_completion.get(k) != set(layers):
+            problems.append(f"{k}: completion entries for layers {sorted(seen_completion.get(k) or [])}, expected {layers}")
+    return problems
+
+
+def _tensor_shapes(out_dir: Path) -> Optional[dict]:
+    """{key: shape} from activations.safetensors (header only), or None if it cannot be read here."""
+    f = Path(out_dir) / "activations.safetensors"
+    if not f.exists():
+        return None
+    try:
+        raw = f.read_bytes()[:8]
+        n = int.from_bytes(raw, "little")
+        with open(f, "rb") as fh:
+            fh.seek(8)
+            header = json.loads(fh.read(n))
+        return {k: v["shape"] for k, v in header.items() if k != "__metadata__"}
+    except (OSError, ValueError):
+        return None
+
+
 def _save_tensors(tensors: dict, out_dir: Path) -> str:
     """safetensors if available (preferred), else .npz. Returns the file written."""
     try:
@@ -427,7 +502,7 @@ def main(argv=None) -> None:
     src.add_argument("--runs", nargs="+", help="run folders (message points; needs load_run.py)")
     src.add_argument("--tokens-json", nargs="+", metavar="[RUN/AGENT=]FILE",
                      help="endpoint exports of /runs/<run>/agents/<name>/tokens?full=1 (every record)")
-    ap.add_argument("--layers", required=True, help="comma-separated decoder layer indices (0-59 for Gemma 4 31B)")
+    ap.add_argument("--layers", help="comma-separated decoder layer indices (0-59 for Gemma 4 31B); required unless --verify-only")
     ap.add_argument("--out", required=True)
     ap.add_argument("--agents", help="comma-separated agent names to include")
     ap.add_argument("--rounds", help="comma-separated round numbers to include")
@@ -440,10 +515,16 @@ def main(argv=None) -> None:
     ap.add_argument("--max-gpu-memory", help="with --device-map auto: cap per GPU, e.g. 28GiB")
     ap.add_argument("--max-cpu-memory", help="with --device-map auto: cap for CPU RAM, e.g. 70GiB")
     ap.add_argument("--dry-run", action="store_true", help="read the inputs and print the plan; no model, no torch")
+    ap.add_argument("--verify", action="store_true",
+                    help="after the run, re-read the inputs and check every index entry (token IDs, spans); exit 1 on a mismatch")
+    ap.add_argument("--verify-only", action="store_true",
+                    help="no replay: check an existing --out folder against the inputs (no model, no torch)")
     a = ap.parse_args(argv)
+    if not a.layers and not a.verify_only:
+        ap.error("--layers is required (unless --verify-only)")
     if (a.max_gpu_memory or a.max_cpu_memory) and a.device_map != "auto":
         ap.error("--max-gpu-memory / --max-cpu-memory need --device-map auto")
-    layers = [int(x) for x in a.layers.split(",")]
+    layers = [int(x) for x in a.layers.split(",")] if a.layers else []
     agents, rounds, records = (set(a.agents.split(",")) if a.agents else None), _ints(a.rounds), _ints(a.records)
     if a.runs:
         from load_run import load_run
@@ -458,6 +539,9 @@ def main(argv=None) -> None:
             print(f"{path}: run {run}, agent {agent}: {len(got)} records to replay"
                   + (f", {len(skipped)} skipped: {skipped[:3]}" if skipped else ""))
             items += got
+    if a.verify_only:
+        _verify_or_exit(Path(a.out), items)
+        return
     pl = plan(items, layers, a.keep_last_prompt, a.pool)
     print("plan:", json.dumps(pl))
     if a.dry_run:
@@ -466,6 +550,32 @@ def main(argv=None) -> None:
                        device=a.device, device_map=a.device_map, max_gpu_memory=a.max_gpu_memory,
                        max_cpu_memory=a.max_cpu_memory)
     print(f"wrote {len(res['index'])} vectors from {len(items)} forward passes to {a.out}")
+    if a.verify:
+        _verify_or_exit(Path(a.out), _reread(a, agents, rounds, records))
+
+
+def _reread(a, agents, rounds, records) -> list:
+    """The inputs read again from disk (independent of the objects the replay used)."""
+    if a.runs:
+        from load_run import load_run
+        return items_from_runs([load_run(p) for p in a.runs], agents, rounds, records)
+    items = []
+    for spec in a.tokens_json:
+        path, run, agent = parse_tokens_spec(spec)
+        if not agents or agent in agents:
+            items += load_tokens_json(path, run, agent, rounds, records)[0]
+    return items
+
+
+def _verify_or_exit(out_dir: Path, items: list) -> None:
+    doc = json.loads((out_dir / "index.json").read_text())
+    problems = verify_index(doc, items, out_dir)
+    if problems:
+        print(f"VERIFY FAILED: {len(problems)} problem(s) in {out_dir}/index.json:", file=sys.stderr)
+        for pr in problems[:20]:
+            print("  " + pr, file=sys.stderr)
+        raise SystemExit(1)
+    print(f"verify OK: {len(doc.get('index', []))} index entries match the input token IDs and span boundaries")
 
 
 if __name__ == "__main__":

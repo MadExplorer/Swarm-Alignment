@@ -325,3 +325,58 @@ def test_decoder_only_forward_gives_identical_activations_and_skips_the_lm_head(
     finally:
         h.remove()
     assert new.keys() == old.keys() and all(torch.equal(new[k], old[k]) for k in new)
+
+
+# ---- --verify: the index must match the input token IDs at every position --------------------------------
+def _replayed(tmp_path, tiny):
+    model, torch, _ = tiny
+    f = tmp_path / "20261108-145133-collusive__Keter__round1.json"
+    f.write_text(json.dumps([{"record": 1, "round": 1, "prompt_len": 6, "prompt_token_ids": [5, 6, 7, 8, 9, 10],
+                              "completion": [11, 12, 13]},
+                             {"record": 2, "round": 1, "prompt_len": 4, "prompt_token_ids": [20, 21, 22, 23],
+                              "completion": [24, 25]}]))
+    items, _ = ra.load_tokens_json(f, "20261108-145133-collusive", "Keter")
+    out = tmp_path / "acts"
+    ra.replay_items(items, [0, 1], out, model=model, tok=None, keep_last_prompt=3, pool=True, device="cpu")
+    return f, out, items
+
+
+def test_verify_passes_on_a_correct_index(tmp_path, tiny):
+    f, out, items = _replayed(tmp_path, tiny)
+    doc = json.loads((out / "index.json").read_text())
+    assert ra.verify_index(doc, items, out) == []
+
+
+@pytest.mark.parametrize("tamper, needle", [
+    (lambda e: e.update(token_positions=[i - 1 for i in e["token_positions"]]), "differ from the input"),   # shifted, inside
+    (lambda e: e.update(token_positions=[i + 1 for i in e["token_positions"]]), "outside prompt+completion"),  # shifted out
+    (lambda e: e["token_ids"].__setitem__(0, 999), "differ from the input, first at position"),
+    (lambda e: e.update(token_positions=e["token_positions"][:-1], token_ids=e["token_ids"][:-1]), "completion span"),
+    (lambda e: e.update(record=7), "record not in the inputs"),
+])
+def test_verify_fails_loudly_on_a_shifted_or_wrong_index(tmp_path, tiny, capsys, tamper, needle):
+    f, out, items = _replayed(tmp_path, tiny)
+    doc = json.loads((out / "index.json").read_text())
+    entry = next(e for e in doc["index"] if e["span"] == "completion" and e["record"] == 1 and not e["pooled"])
+    tamper(entry)
+    (out / "index.json").write_text(json.dumps(doc))
+    assert any(needle in p for p in ra.verify_index(doc, items, out))
+    with pytest.raises(SystemExit) as ex:                       # the CLI path: --verify-only, exit code 1
+        ra.main(["--tokens-json", str(f), "--out", str(out), "--verify-only"])
+    assert ex.value.code == 1 and "VERIFY FAILED" in capsys.readouterr().err
+
+
+def test_verify_only_cli_ok(tmp_path, tiny, capsys):
+    f, out, items = _replayed(tmp_path, tiny)
+    ra.main(["--tokens-json", str(f), "--out", str(out), "--verify-only"])
+    assert "verify OK" in capsys.readouterr().out
+
+
+def test_verify_checks_tensor_rows(tmp_path, tiny):
+    f, out, items = _replayed(tmp_path, tiny)
+    doc = json.loads((out / "index.json").read_text())
+    if ra._tensor_shapes(out) is None:
+        pytest.skip("no safetensors file (npz fallback)")
+    e = next(e for e in doc["index"] if e["span"] == "prompt_tail" and not e["pooled"])
+    e["token_positions"], e["token_ids"] = e["token_positions"][1:], e["token_ids"][1:]
+    assert any("rows for" in p or "prompt_tail span" in p for p in ra.verify_index(doc, items, out))

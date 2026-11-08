@@ -42,9 +42,17 @@ python replay_activations.py --tokens-json exports/*.json --agents Keter --recor
     --keep-last-prompt 128 --device-map auto --max-gpu-memory 28GiB --max-cpu-memory 70GiB --out acts-smoke
 # 3) everything in one invocation (the model is loaded once):
 python replay_activations.py --tokens-json exports/*.json --layers 20,40 --keep-last-prompt 128 \
-    --device-map auto --max-gpu-memory 28GiB --max-cpu-memory 70GiB --out acts
+    --device-map auto --max-gpu-memory 28GiB --max-cpu-memory 70GiB --out acts --verify
 ```
 
+- **`--verify`** re-reads your token JSON after the run and checks every index entry:
+  - the `token_ids` equal the input at every position;
+  - the positions are contiguous and inside prompt + completion;
+  - the span boundaries are exact (completion = `[len(prompt), len(prompt)+len(completion))`; prompt tail ends at `len(prompt)`);
+  - every record has an entry for every layer;
+  - each tensor has one row per position.
+
+  On any mismatch it prints `VERIFY FAILED` and exits with code 1. To check an existing output folder without the model: `python replay_activations.py --tokens-json exports/*.json --out acts --verify-only`.
 - The script prints the device map (how many modules are on `0` and on `cpu`) after loading.
 - If `approx_output_bytes` in the dry run is above ~5 GB, split the work by run (`exports/<RUN>__*.json`, one `--out` per run). The activations are kept in RAM next to the model until the end.
 - `--layers`: decoder layers 0–59; `20,40` is a small example choice.
