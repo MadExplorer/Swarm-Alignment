@@ -31,6 +31,8 @@ The model in bf16 (~62.5 GB) does not fit on a 32 GB GPU, so use `--device-map a
 
 Leave the GPU some headroom for activations (28 of 32 GB). Do not count on the 8 GiB swap.
 
+The script runs the decoder only, with no LM head, so no full-vocabulary logits are computed. Those caused the CUDA out-of-memory error on an 8,055-token record. Memory still grows with the prompt length (attention and the per-layer activations of the whole sequence). For very long records, lower `--max-gpu-memory` (e.g. `24GiB`): more layers then stay in CPU RAM and the GPU keeps more headroom. Check `longest_sequence` in the dry run.
+
 ```bash
 # 1) dry run: reads all files, lists records, prints the plan; no torch, no GPU
 python replay_activations.py --tokens-json exports/*.json --layers 20,40 --keep-last-prompt 128 \

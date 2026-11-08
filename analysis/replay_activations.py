@@ -189,8 +189,30 @@ def spans_for(point_id: str, prompt_ids: list, completion_ids: list, tok=None, m
     return spans
 
 
+def run_decoder(model, input_ids, full_forward: bool = False) -> None:
+    """One forward pass through the decoder only, NO LM head: full-vocabulary logits for every token are the largest
+    tensor of a long forward (Gemma 4: 262,144 x seq_len; an 8,055-token record OOMed in the logits softcapping).
+    transformers 5.20.2, models/gemma4/modeling_gemma4.py: Gemma4ForConditionalGeneration has base_model_prefix =
+    "model" and self.model = Gemma4Model(config); its forward is `outputs = self.model(input_ids=..., ...)`, then
+    `logits = self.lm_head(hidden_states[:, slice_indices, :])` and the softcapping. PreTrainedModel.base_model is
+    getattr(self, self.base_model_prefix, self), so calling it runs exactly the same decoder with the same inputs,
+    without the LM head. A model without a separate base model is called as it is (with logits_to_keep=1 if it
+    accepts it). full_forward=True keeps the old path (whole CausalLM, all logits): tests compare the two."""
+    import inspect
+    if full_forward:
+        model(input_ids=input_ids, use_cache=False)
+        return
+    base = getattr(model, "base_model", None)
+    if base is not None and base is not model:
+        base(input_ids=input_ids, use_cache=False)
+    elif "logits_to_keep" in inspect.signature(model.forward).parameters:
+        model(input_ids=input_ids, use_cache=False, logits_to_keep=1)
+    else:
+        model(input_ids=input_ids, use_cache=False)
+
+
 def replay_point(model, prompt_ids: list, completion_ids: list, layers: list, spans: list,
-                 pool: bool = False, device: str = "cuda") -> dict:
+                 pool: bool = False, device: str = "cuda", full_forward: bool = False) -> dict:
     """One forward pass over prompt+completion (batch 1, no grad). Forward hooks on `layers` capture each
     layer's residual-stream output; for every span we keep that span's token rows. Returns
     {(layer, span_name): tensor[n_tokens, hidden]} and, if pool, {(layer, span_name): tensor[hidden]} (mean).
@@ -216,7 +238,7 @@ def replay_point(model, prompt_ids: list, completion_ids: list, layers: list, sp
         handles.append(blocks[li].register_forward_hook(hook_for(li)))
     try:
         with torch.no_grad():
-            model(input_ids=input_ids, use_cache=False)
+            run_decoder(model, input_ids, full_forward)
     finally:
         for h in handles:
             h.remove()

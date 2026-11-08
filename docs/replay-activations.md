@@ -26,7 +26,7 @@ vLLM 0.33.0's OpenAI server has **no option to return per-token hidden states or
 ## What it does
 
 - Loads `google/gemma-4-31B-it-qat-w4a16-ct` at revision `52f3f65bc7a02d555763bc923bd1d9094898219d` with transformers (needs **`compressed-tensors`** for the w4a16 weights). Eval mode, `no_grad`, **no generation**.
-- **One forward pass** over `prompt + completion` per record or point, batch size 1, the stored IDs fed verbatim.
+- **One forward pass** over `prompt + completion` per record or point, batch size 1, the stored IDs fed verbatim. Only the decoder runs (`model.base_model`, i.e. `Gemma4Model`), not the LM head, so no full-vocabulary logits are computed. The activations are identical to the full forward (tested).
 - Forward hooks on the chosen decoder layers capture each layer's **residual stream** (its raw output, pre the final norm). Gemma 4 31B has **60 decoder layers (indices 0–59), hidden size 5376**; the hook target is `model.language_model.layers` of `Gemma4ForConditionalGeneration` (checked on the real config, meta device). Kept spans:
   - **completion**: the model's output tokens (the tool call);
   - **message** (run-folder mode only): the message text inside the tool call, found by decoding the completion tokens and string-matching (best-effort; skipped if not found);

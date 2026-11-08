@@ -150,6 +150,7 @@ def test_real_gemma_config_has_the_hook_targets():
     assert all(isinstance(blk, nn.Module) for blk in layers)
     h = layers[0].register_forward_hook(lambda m, i, o: None)        # a hook attaches without error
     h.remove()
+    assert type(model.base_model).__name__ == "Gemma4Model"          # run_decoder() calls this: no LM head
 
 
 # ---- endpoint-JSON input mode (--tokens-json) ------------------------------------------------------------
@@ -305,3 +306,22 @@ def test_offloaded_load_matches_plain_model(tmp_path, tiny):
     a = ra.replay_point(model, prompt, completion, [0, 2], spans, device="cpu")["acts"]
     b = ra.replay_point(off, prompt, completion, [0, 2], spans, device="auto")["acts"]
     assert a.keys() == b.keys() and all(torch.allclose(a[k], b[k], atol=1e-6) for k in a)
+
+
+def test_decoder_only_forward_gives_identical_activations_and_skips_the_lm_head(tiny):
+    """Default path (base model, no LM head) vs the old full CausalLM forward: identical hook outputs, and the LM
+    head (full-vocabulary logits, the OOM on long records) is never called."""
+    model, torch, _ = tiny
+    calls = []
+    h = model.lm_head.register_forward_hook(lambda m, i, o: calls.append(o.shape))
+    prompt, completion = list(range(3, 40)), [41, 42, 43]
+    layers = list(range(model.config.num_hidden_layers))
+    spans = ra.spans_for("x", prompt, completion, keep_last_prompt=5)
+    try:
+        new = ra.replay_point(model, prompt, completion, layers, spans, device="cpu")["acts"]
+        assert calls == []                                        # no logits computed
+        old = ra.replay_point(model, prompt, completion, layers, spans, device="cpu", full_forward=True)["acts"]
+        assert len(calls) == 1                                    # the old path does run the LM head
+    finally:
+        h.remove()
+    assert new.keys() == old.keys() and all(torch.equal(new[k], old[k]) for k in new)
