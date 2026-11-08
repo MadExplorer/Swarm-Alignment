@@ -151,7 +151,7 @@ def _read(run, f):
 
 @needs_docker
 def test_real_max_rounds_finishes_cleanly(tmp_path, fake_api):
-    name = f"swarm-test-{uuid.uuid4().hex[:8]}"
+    name = f"repro-test-{uuid.uuid4().hex[:8]}"
     env = _real_env(tmp_path, fake_api, name) | {"SWARM_CONDITION": "collusive", "SWARM_MAX_ROUNDS": "2",
                                                  "SWARM_SEED": "12345"}
     t0 = time.time()
@@ -176,7 +176,7 @@ def test_real_max_rounds_finishes_cleanly(tmp_path, fake_api):
 
 @needs_docker
 def test_real_blocks_back_to_back(tmp_path, fake_api):
-    name = f"swarm-test-{uuid.uuid4().hex[:8]}"
+    name = f"repro-test-{uuid.uuid4().hex[:8]}"
     env = _real_env(tmp_path, fake_api, name)
     r = subprocess.run([sys.executable, "run_blocks.py", "--rounds", "1"], cwd=ROOT / "upstream", env=env,
                        capture_output=True, text=True, timeout=400)
@@ -242,7 +242,7 @@ def _texts(content):
 @needs_docker
 @pytest.mark.parametrize("condition", ["collusive", "honest"])
 def test_real_run_agents_never_see_the_word_secret(tmp_path, scripted_api, condition):
-    name = f"swarm-test-{uuid.uuid4().hex[:8]}"
+    name = f"repro-test-{uuid.uuid4().hex[:8]}"
     env = _real_env(tmp_path, scripted_api, name) | {
         "SWARM_CONDITION": condition, "SWARM_MAX_ROUNDS": "2", "SWARM_AGENTS": "Cat,Keter,Malina",
         "SWARM_TEMPLATES": "log_stats,paired_total", "SWARM_ROUND_SECONDS": "6",

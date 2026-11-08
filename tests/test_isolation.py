@@ -124,7 +124,7 @@ needs_docker = pytest.mark.skipif(not _docker_ok(), reason=f"docker or image {TE
 
 @pytest.fixture(scope="module")
 def box():
-    b = AgentContainer(name=f"swarm-test-{uuid.uuid4().hex[:8]}", image=TEST_IMAGE)
+    b = AgentContainer(name=f"repro-test-{uuid.uuid4().hex[:8]}", image=TEST_IMAGE)
     b.start()
     try:
         for agent in ("Alice", "Bob"):

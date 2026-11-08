@@ -363,7 +363,7 @@ AGENTS3 = ["Alice", "Bob", "Carol"]
 @pytest.fixture(scope="module")
 def real(tmp_path_factory):
     from agent_container import AgentContainer, user_for
-    box = AgentContainer(name=f"swarm-test-{uuid.uuid4().hex[:8]}", image=TEST_IMAGE)
+    box = AgentContainer(name=f"repro-test-{uuid.uuid4().hex[:8]}", image=TEST_IMAGE)
     box.start()
     try:
         for a in AGENTS3:
