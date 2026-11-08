@@ -400,7 +400,7 @@ sha256:40ff0b3c1497f4926156f2a03ab2b923838589b85cca265c601a63c604872d05 | 2026-1
 <missing> | 2026-11-04T21:23:39Z | 120MB | # debian.sh --arch 'amd64' out/ 'trixie' '@1793827419'
 ```
 
-(`agents:v1.0`, built 13:02 UTC the same day, has the same top-level config; its history is in the backup notes, not needed here.)
+(`agents:v1.0`, built 13:02 UTC the same day, has the same `Cmd` and `WorkingDir`; both histories and the Dockerfile are saved in `evidence/oldserver-backup/` (`agents-v1.0-history.txt`, `agents-v1.1-history.txt`, `agents-v1.1-Dockerfile`, git-ignored).)
 
 **Old vs new agent image:**
 - **Same base:** the 13 `python:3.12` base layers (Python 3.12.16, built 2026-11-05) match the new image `3223d5d2e68b` exactly in date, size and command.
