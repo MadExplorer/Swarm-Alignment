@@ -13,7 +13,8 @@ Two input modes (same output):
                     Run and agent come from the file name, or write RUN/AGENT=FILE. Needs no run folder,
                     no load_run.py, and never our vLLM: any machine with a big enough GPU.
     common options  [--agents Keter,Malina] [--rounds 1,2] [--records 3,7] [--keep-last-prompt 256] [--pool]
-                    [--device cuda | --device-map auto] [--dry-run]
+                    [--device cuda | --device-map auto [--max-gpu-memory 28GiB] [--max-cpu-memory 70GiB]]
+                    [--dry-run]
 
 Output (one file pair in --out):
     activations.safetensors (or .npz)  tensors, one per (point or record, layer, span), float32 [n_tokens, hidden]
@@ -44,22 +45,63 @@ RUN_NAME_RE = re.compile(r"(?<![A-Za-z0-9])([A-Z][A-Za-z0-9]{0,7}-)?\d{8}-\d{6}(
 
 
 # ---- model loading (heavy deps imported lazily, so the module imports without torch) -----------------------
+def max_memory_map(max_gpu: Optional[str], max_cpu: Optional[str], n_gpus: int) -> Optional[dict]:
+    """accelerate's max_memory: the same cap for every visible GPU (0..n_gpus-1) and one for the CPU."""
+    if not max_gpu and not max_cpu:
+        return None
+    out = {i: max_gpu for i in range(n_gpus)} if max_gpu else {}
+    if max_cpu:
+        out["cpu"] = max_cpu
+    return out
+
+
 def load_model(model_id: str = MODEL_ID, revision: Optional[str] = REVISION, device: str = "cuda",
-               dtype: str = "auto", device_map: Optional[str] = None):
+               dtype: str = "auto", device_map: Optional[str] = None, max_gpu_memory: Optional[str] = None,
+               max_cpu_memory: Optional[str] = None):
     """Load the model and tokenizer for a forward pass only (eval, no grad, no generation). `model_id` may be a
-    local path (tests use a tiny model), in which case pass revision=None. device_map="auto" (needs `accelerate`)
-    spreads the layers over all visible GPUs instead of moving the whole model to `device`."""
+    local path (tests use a tiny model), in which case pass revision=None.
+
+    device_map="auto" (needs `accelerate`): GPU + CPU offload, for GPUs smaller than the bf16 model. The model is
+    first loaded on the CPU with the compressed-tensors weights DEQUANTIZED to bf16 at load time
+    (CompressedTensorsConfig(dequantize=True); ~62.5 GB RAM for Gemma 4 31B), then accelerate computes the device
+    map from the bf16 sizes within --max-gpu-memory / --max-cpu-memory and dispatches it (layers that do not fit
+    on the GPU stay in CPU RAM and are moved to the GPU for their part of each forward pass). Why not
+    from_pretrained(device_map="auto") directly: transformers sizes the map from the COMPRESSED parameters
+    (quantizers/base.py param_element_size = param.element_size()), so everything would be put on the GPU and
+    then decompressed there on the first forward pass (compressed-tensors' decompress hook), far over 32 GB."""
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(model_id, revision=revision)
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+    try:
+        tok = AutoTokenizer.from_pretrained(model_id, revision=revision)
+    except (OSError, ValueError) as e:      # a bare test model has no tokenizer; only the message span needs it
+        print(f"warning: no tokenizer ({type(e).__name__}); message spans are skipped")
+        tok = None
     torch_dtype = dtype if dtype == "auto" else getattr(torch, dtype)
-    if device_map:
-        model = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, dtype=torch_dtype,
-                                                     device_map=device_map)
-    else:
+    if not device_map:
         model = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, dtype=torch_dtype)
         model.to(device)
+        model.eval()
+        return model, tok
+    from accelerate import dispatch_model, infer_auto_device_map
+    kw = {}
+    qc = getattr(AutoConfig.from_pretrained(model_id, revision=revision), "quantization_config", None)
+    quant_method = qc.get("quant_method") if isinstance(qc, dict) else getattr(qc, "quant_method", None)
+    if str(quant_method) == "compressed-tensors":
+        from transformers import CompressedTensorsConfig
+        kw["quantization_config"] = CompressedTensorsConfig(dequantize=True)   # bf16 at load time, on the CPU
+    model = AutoModelForCausalLM.from_pretrained(model_id, revision=revision, dtype=torch_dtype, **kw)
     model.eval()
+    max_memory = max_memory_map(max_gpu_memory, max_cpu_memory, torch.cuda.device_count())
+    dmap = infer_auto_device_map(model, max_memory=max_memory,
+                                 no_split_module_classes=list(getattr(model, "_no_split_modules", None) or []))
+    if "disk" in set(dmap.values()):
+        raise SystemExit("the model does not fit into --max-gpu-memory + --max-cpu-memory (accelerate wants disk "
+                         "offload); raise the caps")
+    model = dispatch_model(model, device_map=dmap)
+    per_device = {}
+    for dev in dmap.values():
+        per_device[str(dev)] = per_device.get(str(dev), 0) + 1
+    print(f"device map ({len(dmap)} entries): {per_device}  max_memory={max_memory}")
     return model, tok
 
 
@@ -275,11 +317,13 @@ def load_tokens_json(path, run: str, agent: str, rounds: Optional[set] = None, r
 # ---- replay -----------------------------------------------------------------------------------------------
 def replay_items(items: list, layers: list, out_dir: Path, model=None, tok=None,
                  keep_last_prompt: Optional[int] = None, pool: bool = False, device: str = "cuda",
-                 device_map: Optional[str] = None, save: bool = True) -> dict:
+                 device_map: Optional[str] = None, max_gpu_memory: Optional[str] = None,
+                 max_cpu_memory: Optional[str] = None, save: bool = True) -> dict:
     """Replay each item (one forward pass) and write activations + index. Returns the index dict. `model` and
     `tok` are injected (tests pass a tiny model); if None they are loaded with load_model()."""
     if model is None:
-        model, tok = load_model(device=device, device_map=device_map)
+        model, tok = load_model(device=device, device_map=device_map, max_gpu_memory=max_gpu_memory,
+                                max_cpu_memory=max_cpu_memory)
         if device_map:
             device = "auto"
     out_dir = Path(out_dir)
@@ -369,9 +413,14 @@ def main(argv=None) -> None:
     ap.add_argument("--keep-last-prompt", type=int, default=None, help="also keep the last N prompt tokens")
     ap.add_argument("--pool", action="store_true", help="also save a mean-pooled vector per span")
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--device-map", choices=["auto"], help="spread the model over all visible GPUs (needs accelerate)")
+    ap.add_argument("--device-map", choices=["auto"],
+                    help="GPU(s) + CPU offload (needs accelerate): bf16 weights placed within the caps below")
+    ap.add_argument("--max-gpu-memory", help="with --device-map auto: cap per GPU, e.g. 28GiB")
+    ap.add_argument("--max-cpu-memory", help="with --device-map auto: cap for CPU RAM, e.g. 70GiB")
     ap.add_argument("--dry-run", action="store_true", help="read the inputs and print the plan; no model, no torch")
     a = ap.parse_args(argv)
+    if (a.max_gpu_memory or a.max_cpu_memory) and a.device_map != "auto":
+        ap.error("--max-gpu-memory / --max-cpu-memory need --device-map auto")
     layers = [int(x) for x in a.layers.split(",")]
     agents, rounds, records = (set(a.agents.split(",")) if a.agents else None), _ints(a.rounds), _ints(a.records)
     if a.runs:
@@ -392,7 +441,8 @@ def main(argv=None) -> None:
     if a.dry_run:
         return
     res = replay_items(items, layers, Path(a.out), keep_last_prompt=a.keep_last_prompt, pool=a.pool,
-                       device=a.device, device_map=a.device_map)
+                       device=a.device, device_map=a.device_map, max_gpu_memory=a.max_gpu_memory,
+                       max_cpu_memory=a.max_cpu_memory)
     print(f"wrote {len(res['index'])} vectors from {len(items)} forward passes to {a.out}")
 
 

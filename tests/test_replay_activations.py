@@ -273,3 +273,35 @@ def test_dry_run_reads_exports_without_torch(tmp_path, capsys):
     assert plan["forward_passes"] == 1 and plan["longest_sequence"] == 5
     assert plan["stored_rows"] == (2 + 2) * 2 and plan["approx_output_bytes"] == 8 * ra.GEMMA_HIDDEN * 4
     assert not (tmp_path / "o").exists()                       # dry run writes nothing
+
+
+# ---- GPU + CPU offload (--device-map auto with memory caps) ----------------------------------------------
+def test_max_memory_map():
+    assert ra.max_memory_map("28GiB", "70GiB", 1) == {0: "28GiB", "cpu": "70GiB"}
+    assert ra.max_memory_map("20GiB", None, 2) == {0: "20GiB", 1: "20GiB"}
+    assert ra.max_memory_map(None, "70GiB", 0) == {"cpu": "70GiB"}
+    assert ra.max_memory_map(None, None, 1) is None
+
+
+def test_memory_caps_need_device_map_auto(tmp_path):
+    f = tmp_path / "20261108-145133-collusive__Keter.json"
+    f.write_text("[]")
+    with pytest.raises(SystemExit):
+        ra.main(["--tokens-json", str(f), "--layers", "1", "--out", str(tmp_path / "o"), "--max-gpu-memory", "28GiB"])
+
+
+def test_offloaded_load_matches_plain_model(tmp_path, tiny):
+    """load_model(device_map="auto", caps) on a saved tiny model: dispatched by accelerate within max_memory, and
+    the replayed residual stream equals the same model without offloading (CPU-only here; on a GPU machine the
+    layers that do not fit stay on the CPU)."""
+    model, torch, _ = tiny
+    pytest.importorskip("accelerate")
+    model.save_pretrained(tmp_path / "tinymodel")
+    off, tok = ra.load_model(str(tmp_path / "tinymodel"), revision=None, device_map="auto",
+                             max_cpu_memory="2GiB", dtype="float32")
+    assert tok is None and getattr(off, "hf_device_map", None)
+    prompt, completion = [5, 6, 7, 8], [9, 10]
+    spans = ra.spans_for("x", prompt, completion, keep_last_prompt=2)
+    a = ra.replay_point(model, prompt, completion, [0, 2], spans, device="cpu")["acts"]
+    b = ra.replay_point(off, prompt, completion, [0, 2], spans, device="auto")["acts"]
+    assert a.keys() == b.keys() and all(torch.allclose(a[k], b[k], atol=1e-6) for k in a)

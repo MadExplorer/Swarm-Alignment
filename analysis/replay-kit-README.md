@@ -23,41 +23,47 @@ Your files are the endpoint exports of `/runs/<run>/agents/<name>/tokens?full=1`
 - **Name contains both** (agent name in any case; run name in the file name or its folder), e.g. `20261108-145133-collusive__Keter__round1.json` or `20261108-145133-collusive/keter.json`: pass the files as they are.
 - **Otherwise**, label each file: `--tokens-json <RUN>/<AGENT>=<file>`, e.g. `20261108-145133-collusive/Keter=keter_r1.json`.
 
-## 3. Run
+## 3. Run (RTX 5090 32 GB + ~82 GiB free RAM: GPU + CPU offload)
 
-First a dry run. It reads every file, reports records and skipped records, and prints the plan: forward passes, longest sequence, approximate output size. It needs no GPU and no torch.
+The model in bf16 (~62.5 GB) does not fit on a 32 GB GPU, so use `--device-map auto` with memory caps:
+- the weights are dequantized to bf16 **on the CPU at load time** (~62.5 GB RAM);
+- accelerate then puts as many decoder layers on the GPU as fit under `--max-gpu-memory`, and keeps the rest in RAM, moving each of them to the GPU for its part of every forward pass.
 
-```bash
-python replay_activations.py --tokens-json exports/<RUN>__*.json --layers 15,30,45 \
-    --keep-last-prompt 256 --pool --out acts/<RUN> --dry-run
-```
-
-Then the real run, **one run per output folder**. Activations stay in RAM until the end, and the dry run prints how much.
+Leave the GPU some headroom for activations (28 of 32 GB). Do not count on the 8 GiB swap.
 
 ```bash
-# one 80 GB GPU:
-python replay_activations.py --tokens-json exports/<RUN>__*.json --layers 15,30,45 \
-    --keep-last-prompt 256 --pool --out acts/<RUN> --device cuda
-# several smaller GPUs (untested with this model, needs accelerate):
-python replay_activations.py --tokens-json exports/<RUN>__*.json --layers 15,30,45 \
-    --keep-last-prompt 256 --pool --out acts/<RUN> --device-map auto
+# 1) dry run: reads all files, lists records, prints the plan; no torch, no GPU
+python replay_activations.py --tokens-json exports/*.json --layers 20,40 --keep-last-prompt 128 \
+    --out acts --dry-run
+# 2) smoke test: 2 records of one agent (loads the model once, ~10-20 min before the first forward)
+python replay_activations.py --tokens-json exports/*.json --agents Keter --records 1,2 --layers 20,40 \
+    --keep-last-prompt 128 --device-map auto --max-gpu-memory 28GiB --max-cpu-memory 70GiB --out acts-smoke
+# 3) everything in one invocation (the model is loaded once):
+python replay_activations.py --tokens-json exports/*.json --layers 20,40 --keep-last-prompt 128 \
+    --device-map auto --max-gpu-memory 28GiB --max-cpu-memory 70GiB --out acts
 ```
 
-- `--layers`: decoder layers 0–59 (Gemma 4 31B has 60). `15,30,45` is only an example.
-- `--keep-last-prompt N` keeps the last N prompt tokens as well as the completion. `--pool` adds a mean vector per span.
-- To start small: `--agents Keter --records 1,2`.
+- The script prints the device map (how many modules are on `0` and on `cpu`) after loading.
+- If `approx_output_bytes` in the dry run is above ~5 GB, split the work by run (`exports/<RUN>__*.json`, one `--out` per run). The activations are kept in RAM next to the model until the end.
+- `--layers`: decoder layers 0–59; `20,40` is a small example choice.
+- `--keep-last-prompt 128` keeps the last 128 prompt tokens as well as the completion.
+
+**Rough time (a guess, not measured):**
+- Loading plus CPU dequantization: about 10–20 min.
+- Each forward pass moves the CPU-resident part of the weights, about 30 GB, over PCIe (a few seconds), plus compute over the whole sequence (up to about 10–20k tokens). That is roughly **5–15 s per record**.
+- Round 1 has about 20–40 records per agent, so 5 agents × your runs (`forward_passes` in the dry run) is a few hundred records: **on the order of 0.5–1.5 h**.
+- Time the smoke test and scale by `total_tokens_fed`.
 
 ## 4. Output
 
 `acts/<RUN>/activations.safetensors` holds float32 tensors `[n_tokens, 5376]`, and `[5376]` for pooled ones. `acts/<RUN>/index.json` maps every tensor key to `run`, `agent`, `record`, `round`, `span` (`completion` / `prompt_tail`), `layer`, `token_positions` (in prompt + completion) and `token_ids`. So each vector maps back to (run, agent, record, token position). There's an example loader in `replay-activations.md`.
 
-## 5. GPU memory (read before choosing a machine)
+## 5. GPU memory: why offload
 
-- Checked in the installed source (transformers 5.20.2 + compressed-tensors 0.17.0): the 4-bit checkpoint is **decompressed to bf16 on the first forward pass** and stays that way.
-- The model has 31.27 B parameters, so the weights take **about 62.5 GB**. That is our estimate, **not measured**.
-- Add the forward pass on top: sequences up to ~20k tokens, roughly 0.2 GB per layer for the residual stream plus transient buffers.
-- So you need **one 80 GB GPU** (A100 80GB / H100), or several GPUs with `--device-map auto`. **A single 24 GB or 32 GB GPU is not enough.**
-- Start with the shortest records and watch `nvidia-smi`.
+- **The 4-bit model cannot stay compressed during the forward pass** with transformers 5.20.2 + compressed-tensors 0.17.0. `run_compressed` is deprecated and only means `dequantize=False`, under which compressed-tensors decompresses the whole model on the first forward pass. `CompressedLinear` raises "no longer supported", and the only kernel path (`use_optimized_inference`) covers W8A8 FP8. Checked in the installed source.
+- **In bf16 the model is 31.27 B parameters, about 62.5 GB** (estimate from the parameter count, not measured). So you need one 80 GB GPU, or a smaller GPU with CPU offload (section 3).
+- **Not confirmed:** we could **not confirm** that compressed-tensors' first-forward decompression works on accelerate-offloaded modules. Its `decompress_module` reads `module._parameters` directly, which accelerate replaces with `meta` tensors on offloaded modules. compressed-tensors has its own conversion (`load_offloaded_model` / `from_accelerate`), but transformers does not use it. The script therefore **does not rely on it**: it dequantizes on the CPU at load time and only then lets accelerate place and offload the plain bf16 model.
+- **Why not plain `from_pretrained(device_map="auto")`:** transformers would size the map from the compressed parameters (about 22 GB), put everything on the GPU and then decompress there.
 
 ## 6. What is verified
 
@@ -66,6 +72,6 @@ python replay_activations.py --tokens-json exports/<RUN>__*.json --layers 15,30,
 - Both modes give identical activations on a tiny model.
 - The real Gemma 4 config builds with these versions, and the 60 hook targets are found.
 
-**Not verified:** loading the real weights and running a forward pass on a GPU (we have not done it); `--device-map auto` with this model.
+**Not verified:** loading the real weights and running a forward pass on a GPU (we have not done it); the offload path with the real model (tested only on a tiny model on CPU, where it gives the same activations as without offload).
 
 Activations are close to, but not bit-identical with, vLLM's internal ones: same weights and token IDs, but different kernels.

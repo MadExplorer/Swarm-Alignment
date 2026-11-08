@@ -73,12 +73,19 @@ Facts (checked in the installed source and on the model's config, not on a GPU r
 - The model has **31.27 B parameters** (`Gemma4ForConditionalGeneration`; 30.70 B in the language model).
 - With transformers 5.20.2 and compressed-tensors 0.17.0, a compressed checkpoint loads compressed, but compressed-tensors registers a hook that **decompresses the whole model to bf16 on the first forward pass** (`ModelCompressor.decompress_model`) and keeps it that way. There is no 4-bit kernel path in transformers for this format.
 
-So, an **estimate (not measured)**: about **62.5 GB of GPU memory for the weights** (31.27 B × 2 bytes) after the first forward, plus the forward pass itself.
+So, an **estimate (not measured)**: about **62.5 GB for the weights** in bf16, plus the forward pass.
+- **Not supported: keeping the model compressed.** transformers 5.20.2 + compressed-tensors 0.17.0 have no compressed forward for W4A16:
+  - `run_compressed` is deprecated and only sets `dequantize=False`;
+  - `apply_quantization_config`'s `run_compressed` argument is unused;
+  - `CompressedLinear` raises "no longer supported";
+  - `use_optimized_inference` covers only W8A8 FP8.
 - **One 80 GB GPU** (A100 80GB, H100) is the simple case.
-- **Several GPUs:** `--device-map auto` (needs `accelerate`) spreads the layers, e.g. 3 × 32 GB or 4 × 24 GB. **Untested** with this model: we have not run the real model in transformers at all.
-- **A single 24 GB or 32 GB GPU is not enough.**
-- **The forward pass:** one sequence of up to ~20k tokens (check `longest_sequence` with `--dry-run`). A residual-stream tensor is 20k × 5376 × 2 bytes ≈ 0.2 GB per layer, with larger transient MLP buffers; attention uses PyTorch SDPA. Leave several GB of headroom and start with the shortest records (`--records`).
-- **CPU RAM:** the 22 GB checkpoint is read once, plus the kept activations (`approx_output_bytes`).
+- **A smaller GPU plus CPU RAM:** `--device-map auto --max-gpu-memory 28GiB --max-cpu-memory 70GiB` (needs `accelerate`). The script loads the model on the CPU with the weights **dequantized to bf16 at load time** (`CompressedTensorsConfig(dequantize=True)`, about 62.5 GB RAM). Then `accelerate.infer_auto_device_map` sizes the map from the bf16 parameters within the caps, and `dispatch_model` keeps the layers that do not fit on the GPU in RAM, moving them to the GPU for each forward pass.
+  - It does not use `from_pretrained(device_map="auto")`, because transformers sizes that map from the *compressed* parameters (`quantizers/base.py`: `param_element_size` returns `param.element_size()`, and the compressed-tensors quantizer does not override it). That would put everything on the GPU and then decompress there on the first forward pass.
+  - We could **not confirm** that compressed-tensors' first-forward decompression works on accelerate-offloaded modules (`decompress_module` reads `module._parameters`, which are `meta` tensors under accelerate offload; compressed-tensors' own `load_offloaded_model`/`from_accelerate` conversion is not used by transformers). So the script avoids it.
+  - Tested on a tiny model on CPU (same activations as without offload); **not run with the real model**.
+- **The forward pass:** one sequence of up to ~20k tokens (check `longest_sequence` with `--dry-run`). A residual-stream tensor is 20k × 5376 × 2 bytes ≈ 0.2 GB per layer, plus larger transient MLP buffers; attention uses PyTorch SDPA. Leave a few GB of GPU headroom (hence 28 of 32 GB) and start with a few records (`--records`).
+- **CPU RAM:** about 62.5 GB for the bf16 model in offload mode (22 GB otherwise), plus the kept activations (`approx_output_bytes`).
 - `--device cpu` works for the tests and tiny inputs; a 31B forward over thousands of tokens on CPU is impractically slow (and needs ~65 GB RAM).
 
 ## Notes
