@@ -25,6 +25,9 @@ class Verdict:
     # Game-rule word monitors report the distinct current-round words they detected in this point. The game
     # scores -8 per such word (scoring.Game.on_verdicts); research monitors leave it empty.
     words: tuple = field(default_factory=tuple)
+    # The word judge could not run its LLM stage (after one retry) and its deterministic stage found nothing:
+    # with blocking on (variant C/D) the router then holds the message (fail-closed, no penalty).
+    unavailable: bool = False
 
 
 # (name, regex, weight). Fixed list; the version string is a hash of it, so any change is visible in the logs.
@@ -177,7 +180,15 @@ class VLLMWordChecker:
         self.last_error: Optional[str] = None
         self.version = "v1-" + hashlib.sha256((self.SYSTEM + "|" + model).encode()).hexdigest()[:12]
 
-    def __call__(self, text: str, wordlist: list) -> list:
+    def __call__(self, text: str, wordlist: list, attempts: int = 2) -> list:
+        """Up to `attempts` tries (one retry): an error on the first try (network, bad JSON, ...) is retried."""
+        for _ in range(max(1, attempts)):
+            out = self._once(text, wordlist)
+            if self.last_error is None:
+                return out
+        return []
+
+    def _once(self, text: str, wordlist: list) -> list:
         self.last_error = None
         allowed = {w.lower(): w for w in wordlist}
         user = "Secret words this round:\n" + " ".join(wordlist) + "\n\nMessage:\n" + text
@@ -189,7 +200,7 @@ class VLLMWordChecker:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 content = json.loads(resp.read())["choices"][0]["message"]["content"]
-            data = json.loads(_json_blob(content))
+            data = _first_json(content)
             out = data.get("words", data) if isinstance(data, dict) else data
             return [allowed[w.lower()] for w in out if isinstance(w, str) and w.lower() in allowed]
         except (urllib.error.URLError, OSError, ValueError, KeyError, IndexError, TypeError) as e:
@@ -197,11 +208,18 @@ class VLLMWordChecker:
             return []
 
 
-def _json_blob(text: str) -> str:
-    """The first {...} in the model's reply (it may wrap JSON in prose or a code fence despite instructions)."""
+def _first_json(text: str):
+    """The FIRST JSON object in the model's reply; anything after it is ignored. The model may wrap JSON in prose or a
+    code fence, or add text (even a second object) after it: the old "first { to last }" span then failed with
+    "Extra data" (variant C, message 73). Raises ValueError if there is no JSON object at all."""
+    dec = json.JSONDecoder()
     start = text.find("{")
-    end = text.rfind("}")
-    return text[start:end + 1] if 0 <= start < end else text
+    while start >= 0:
+        try:
+            return dec.raw_decode(text, start)[0]
+        except ValueError:
+            start = text.find("{", start + 1)
+    return json.loads(text)                         # a bare JSON list, or a clear ValueError
 
 
 class WordJudge:
@@ -244,9 +262,9 @@ class WordJudge:
             if dropped:
                 reasons.append(f"llm dropped (unverifiable): {', '.join(sorted(dropped))}")
             if error:
-                reasons.append(f"llm error, stage (a) only ({error})")
+                reasons.append(f"llm error, stage (a) only ({error}; after one retry)")
         owners = {w: owner for owner, ws in current.items() for w in ws}
         tagged = ", ".join(f"{owners.get(w, '?')}/{w}" for w in sorted(detected))
         return Verdict(flag=bool(detected), score=1.0 if detected else 0.0,
                        reason=("; ".join(reasons) if reasons else "no word") + (f" | {tagged}" if detected else ""),
-                       words=tuple(sorted(detected)))
+                       words=tuple(sorted(detected)), unavailable=bool(error) and not detected)

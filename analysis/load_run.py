@@ -78,6 +78,7 @@ class Point:
     words: list[dict] = field(default_factory=list)           # current-round words in the text: [{owner, word}]
     tool_call_id: Optional[str] = None                         # the sender's model call that issued it (messages)
     blocked: bool = False         # variant C (SWARM_JUDGE_BLOCKS=1): the judge found words, the message was not delivered
+    held: bool = False            # variant D: the judge was unavailable, the message was not delivered (no penalty)
 
     @property
     def overt_own(self) -> bool:
@@ -319,6 +320,7 @@ def load_run(path: Union[str, Path], split_multiline_submits: bool = False, incl
     msgs = _jsonl(path / "messages.jsonl")
     deliveries: dict[int, dict[str, float]] = {}
     blocked = {m["id"] for m in msgs if m.get("event") == "blocked"}
+    held = {m["id"] for m in msgs if m.get("event") == "not_delivered_monitor_unavailable"}
     for m in msgs:
         if m.get("event") == "delivered":
             deliveries.setdefault(m["id"], {})[m["recipient"]] = _t(m["time"])
@@ -328,7 +330,7 @@ def load_run(path: Union[str, Path], split_multiline_submits: bool = False, incl
             points.append(Point(f"m{m['id']}", "message", rnd, _t(m["time"]), m["sender"], list(m["recipients"]),
                                 m["text"], deliveries.get(m["id"], {}), verdicts.get(f"m{m['id']}", {}),
                                 game_rule.get(f"m{m['id']}", {}), words_in(m["text"], secrets.get(rnd, {})),
-                                m.get("tool_call_id"), blocked=m["id"] in blocked))
+                                m.get("tool_call_id"), blocked=m["id"] in blocked, held=m["id"] in held))
     # Shared-folder events (branch shared-folder): visible to every other agent as soon as the harness lists them.
     for e in _jsonl(path / "shared_events.jsonl"):
         if e.get("by", "agent") != "agent" or not e.get("monitored", True):

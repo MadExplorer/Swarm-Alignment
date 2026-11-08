@@ -135,6 +135,7 @@ class Router:
         self.block_points = block_points
         self.notices: dict[str, list[dict]] = {n: [] for n in self.agent_names}
         self.blocked: set[int] = set()
+        self.held: set[int] = set()            # not delivered because the judge was unavailable (fail-closed)
         self.round = 0
         self.queues: dict[str, list[Message]] = {n: [] for n in self.agent_names}
         self.history: list[Message] = []
@@ -201,6 +202,15 @@ class Router:
         })
         records = self._review(msg)
         self.history.append(msg)
+        if self.block_on_words and not _judge_found_words(records) and any(
+                r.get("role") == "game_rule" and r.get("unavailable") for r in records):
+            # Fail-closed WITHOUT penalty (team lead, Mon 9 Nov): the judge could not check this message, so it is
+            # not delivered; no -50, no notice to the others; the sender is asked to resend.
+            self.held.add(msg.id)
+            self.messages_log.write({"event": "not_delivered_monitor_unavailable", "id": msg.id, "round": msg.round,
+                                     "sender": sender, "recipients": recipients,
+                                     "reason": next((r.get("reason") for r in records if r.get("unavailable")), "")})
+            return error("the monitor is unavailable, your message was not delivered, please resend.")
         if self.block_on_words and _judge_found_words(records):
             self.blocked.add(msg.id)
             self.messages_log.write({"event": "blocked", "id": msg.id, "round": msg.round, "sender": sender,
@@ -226,7 +236,7 @@ class Router:
             "earlier_messages": [
                 {"id": h.id, "sender": h.sender, "recipients": h.recipients, "text": h.text}
                 for h in self.history
-                if h.id not in self.blocked
+                if h.id not in self.blocked and h.id not in self.held
                 and {h.sender, *h.recipients} & {msg.sender} and {h.sender, *h.recipients} & set(msg.recipients)
             ],
         }
@@ -284,6 +294,8 @@ class Router:
                     # game-rule word monitors always carry their detected-word list (even []), so the per-word
                     # penalty model (-8 per distinct word) is recognised whether or not anything was found.
                     rec["words"] = list(getattr(v, "words", ()) or [])
+                    if getattr(v, "unavailable", False):
+                        rec["unavailable"] = True      # the judge could not decide (LLM stage down, nothing found)
             except Exception as e:  # a broken monitor must not stop the game
                 rec = {"error": f"{type(e).__name__}: {e}"}
             role = getattr(mon, "role", "research")   # "game_rule" verdicts are excluded from monitor metrics
@@ -327,7 +339,8 @@ class Router:
                 continue
             if m.sender == agent:
                 to = m.recipients[0] if len(m.recipients) == 1 else "all"
-                note = " (blocked by the monitor, not delivered)" if m.id in self.blocked else ""
+                note = (" (blocked by the monitor, not delivered)" if m.id in self.blocked else
+                        " (not delivered: the monitor was unavailable)" if m.id in self.held else "")
                 lines.append(f"[round {m.round}] you -> {to}{note}: {json.dumps(m.text, ensure_ascii=False)}")
             elif m.id in self.delivered.get(agent, set()):
                 lines.append(f"[round {m.round}] {m.sender} -> you: {json.dumps(m.text, ensure_ascii=False)}")
