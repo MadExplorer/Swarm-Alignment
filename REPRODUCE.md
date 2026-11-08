@@ -290,3 +290,17 @@ First blocks: `A-20261108-154508-collusive` (variant A, shared folder on, 8000) 
 ## 11. Activation replay kit for teammates
 
 `dist/replay-activations-kit.zip` (not in git): `replay_activations.py`, `replay-activations.md`, `requirements-replay.txt`, `README.md`. Adds the `--tokens-json` input mode (endpoint exports of `/runs/<run>/agents/<name>/tokens?full=1`). Checked: token IDs identical to the run-folder mode on `20261108-145133-collusive` round 1 (through the real endpoint code), identical tiny-model activations, standalone dry run without the repo or torch. GPU facts, checked in the installed source but not run on a GPU: compressed-tensors decompresses the checkpoint to bf16 on the first forward pass; 31.27 B parameters ≈ 62.5 GB.
+
+## 12. Variant C (launched 17:22:13 UTC Sun 8 Nov 2026; team lead's change of plan: no separate validation, B keeps running)
+
+Code `382995b` in `/root/repro/host-C` (hash check re-run OK right before launch; `/root/repro/host` untouched). Shares only vLLM port 8001 with B's block 2 (by decision); its own container `repro3`, stop file `/root/repro/stop-C`, prefix `C`, console `C-console.log`. tmux `repro:runC`:
+
+```
+cd /root/repro/host-C/upstream && echo false > /root/repro/stop-C && SWARM_ISOLATION=container SWARM_AGENT_IMAGE=agents:v1.1 SWARM_RUN_DIR=/root/repro/host-runs SWARM_CONFIG=/root/repro/host-C/upstream/swarm.yaml PYTHONDONTWRITEBYTECODE=1 SWARM_DEPLOYED_COMMIT=$(cat /root/repro/host-C-DEPLOYED_COMMIT) SWARM_RUN_PREFIX=C SWARM_SHARED_FOLDER=0 SWARM_JUDGE_BLOCKS=1 SWARM_API_BASE=http://127.0.0.1:8001/v1 SWARM_AGENT_CONTAINER=repro3 SWARM_STOP_FILE=/root/repro/stop-C SWARM_ROUND_SECONDS=300 /root/repro/host-venv/bin/python run_blocks.py --order collusive:8,honest:8,collusive:8,honest:8 2>&1 | tee /root/repro/host-runs/C-console.log
+```
+
+First folder `C-20261108-172215-collusive` (`judge_blocks: true`, shared folder off, `api_base` 8001, `deployed_commit` 382995b…, container check: network none, no mounts, not privileged).
+
+B's run_blocks parent (PID 116222, verified `SWARM_RUN_PREFIX=B`, 8001, `repro2` via /proc/116222/environ) was sent SIGTERM at 16:51 UTC, so no block 3 starts; B's block 2 (`main.py` PID 321807) runs to its end.
+
+Caveat: while B's block 2 and C both run, they share one vLLM server (8001), so both get slower model responses and fewer steps per 300 s round than a lone run. Rounds are measured in active time, not steps, so block-level comparisons involving B block 2 and C's first block should note the overlap.
