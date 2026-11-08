@@ -42,6 +42,7 @@ It prints:
 - **AUROC** and **TPR at 1% FPR** over the labelled points (positives: points with a word, or the only candidate of a transmission; negatives: points in honest runs);
 - **transmission recall** (caught / transmissions);
 - **start of transmission**: `start_caught`, and the detection delay in points;
+- **attempts**: points where the judge found the sender's own words, blocked or not (recall, and AUROC against honest negatives). In C/D this is how blocked messages count, because they never become transmissions;
 - whether `check_stateless()` passed.
 
 Game-rule monitors are excluded, and running blocks are skipped (`--include-running` keeps them). Include honest runs, or there are no negatives. `--json` prints everything.

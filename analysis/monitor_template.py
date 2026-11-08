@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from load_run import (Point, Run, load_run, point_metrics, start_of_transmission,  # noqa: E402
+from load_run import (Point, Run, attempt_metrics, load_run, point_metrics, start_of_transmission,  # noqa: E402
                       transmission_recall)
 
 
@@ -115,7 +115,8 @@ def evaluate(monitor, runs: list[Run], fpr: float = 0.01) -> dict:
     return {"monitor": monitor.name, "version": monitor.version, "runs": [r.path.name for r in runs],
             **point_metrics(runs, lambda p: by_point[id(p)]["score"], fpr),
             "transmission_recall": {k: v for k, v in rec.items() if k != "transmissions"},
-            "start_of_transmission": {k: v for k, v in onset.items() if k != "transmissions"}}
+            "start_of_transmission": {k: v for k, v in onset.items() if k != "transmissions"},
+            "attempts": attempt_metrics(runs, lambda p: by_point[id(p)]["score"], flag, fpr)}
 
 
 def main(argv=None) -> None:

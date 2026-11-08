@@ -418,5 +418,8 @@ def main_eval(argv=None, runs_root: Optional[str] = None) -> int:
           + ("; fewer than 100 negatives, so this is TPR at 0 false positives)" if few else ")"))
     print(f"  transmission recall  {tr.get('recall')}  ({tr.get('caught')}/{tr.get('n')}, unobserved {tr.get('unobserved')})")
     print(f"  start caught         {so.get('start_caught')}  detection delay {so.get('detection_delay')}")
+    at = res.get("attempts") or {}
+    print(f"  attempts             recall {at.get('recall')}  ({at.get('flagged')}/{at.get('attempts')} flagged, "
+          f"{at.get('blocked')} of them blocked); AUROC vs honest negatives {at.get('auroc')}; source {at.get('sources')}")
     print(f"  stateless check      {'passed' if res['stateless'] else 'FAILED (scores depend on visiting order)'}")
     return 0
