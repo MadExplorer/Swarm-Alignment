@@ -6,7 +6,31 @@ Context for Claude Code. Read this whole file before doing anything. Status as o
 
 We are a team in the Apart Research Swarm Alignment Hackathon (6–8 Nov 2026), Track 4: Multi-Agent Oversight and Control. We build a sandbox where several LLM agents play a game that rewards passing secrets to each other while a monitor watches for that communication, then we evaluate monitors (text-based and activation-based) for detecting collusion/steganography. Submission closes **Sunday 8 Nov, 23:59 AoE (Monday ~13:00 CET)**. Report: ≤ 8 pages, English, official template, with a "Limitations and Dual-Use / Ethical Considerations" appendix.
 
-## 1a. Status — night of Sat 7 → Sun 8 Nov 2026 (read this first)
+## 1b. NEW SERVER `tl2` (from Sun 8 Nov 2026, ~13:30 UTC) — read this first
+
+The old server (`tl`) is **gone**. Sections 1a, 4 and 6 describe it and are historical. All six longrun2 blocks are on Ivan's Mac in `evidence/runs/` (20261107-223221-collusive … 20261108-043719-honest, each with `run_end.json`).
+
+- **Access:** SSH alias `tl2` in `~/.ssh/config`. **Never write its address into the repo.** Team lead's tmux session `0` on tl2: **never touch it.** Installs on tl2 are allowed, but show Ivan each writing command first.
+- **Hardware:** KVM VM, Ubuntu 22.04.5, 184 vCPUs, 296 GiB RAM, 497 G disk; **4 × RTX 5090 32 GB (sm_120)**, driver 580.95.05 / CUDA 13.0; host Python 3.10.12; Docker 28.1.1. Details and outputs are in `REPRODUCE.md`.
+- **NVIDIA Container Toolkit is NOT installed** (the `daemon.json` entry and apt source exist, the binaries don't). It must be installed before `--gpus` works.
+- **Image `agents:v1.1` on tl2 (`3223d5d2e68b`) is a NEW build, not the old image:** `FROM python:3.12` (3.12.16, Debian trixie), `WORKDIR /app` (holds its Dockerfile), `CMD ["sleep","infinity"]`. Full Dockerfile and history are in `REPRODUCE.md`. The open item "does `bash -lc` source `/etc/profile.d`" must be re-checked on this image.
+- **Plan (Ivan's, Sun 8 Nov):** Ivan runs vLLM himself (through Claude). Two vLLM servers, TP=2 each, in tmux session **`repro`** on tl2. Container `Agents` (GPUs 0,1, host `127.0.0.1:8000`) and container `Agents2` (GPUs 2,3, host `127.0.0.1:8001`). They share a venv folder and an HF cache under `/root/repro/`. On tl2 these containers are **ours**, not the team lead's. The harness runs on the host from `/root/repro`; the endpoint runs on `127.0.0.1:8765`; two parallel runs (8000 / 8001).
+- **Live state (14:20 UTC Sun 8 Nov):** NVIDIA Container Toolkit 1.20.1 installed (this removed its apt hold; driver unchanged), Docker restarted. Containers `Agents` (GPUs 0,1 → `127.0.0.1:8000`) and `Agents2` (GPUs 2,3 → `127.0.0.1:8001`) run `vllm serve` in tmux `repro:vllm0` / `repro:vllm1`. Logs are in `/root/repro/vllm/logs/`, venv `/root/repro/vllm/venv` (shared), HF cache `/root/repro/hf-cache` (shared). Agents2 runs with `HF_HUB_OFFLINE=1`. Both return identical token IDs for the same greedy request; `return_token_ids` and `/detokenize` work on both. No HF token was used (the model is ungated).
+- **vLLM 0.33.0 on sm_120: supported, confirmed after install** (`torch.cuda.get_arch_list()` includes `sm_120`, capability (12, 0)) (verified in the v0.33.0 source: `CUDA_SUPPORTED_ARCHS` includes 12.0 for CUDA ≥ 13.0, release build `CUDA_VERSION=13.0.3`, `torch_cuda_arch_list` includes 12.0; the wheel pins `torch==2.14.0`, a CUDA 13.0.3 build; driver 580 supports CUDA 13.0). `vllm download-kernels` exists in 0.33.0 (installs FlashInfer's precompiled kernels). `--revision` also pins the tokenizer (`tokenizer_revision` defaults to `revision`). Still to confirm after install: `torch.cuda.get_arch_list()` contains `sm_120`.
+
+### Differences from the old server (for the report's Limitations)
+
+| | Old server (`tl`, runs up to 20261108-043719) | New server (`tl2`) |
+|---|---|---|
+| GPUs | 4 × RTX 4090 24 GB (sm_89, Ada) | 4 × RTX 5090 32 GB (sm_120, Blackwell) |
+| vLLM topology | 1 server, TP=4, inside the team lead's `Agents` container together with the harness | 2 servers, TP=2 each, in our `Agents`/`Agents2` containers; harness on the host |
+| Agents' container image `agents:v1.1` | old build, `WORKDIR /usr/src/app` | new build `3223d5d2e68b`: `FROM python:3.12` (3.12.16, Debian trixie), `WORKDIR /app`. The agents' environment changed too (packages, shell startup files, CLI tools), not only vLLM. **The harness startup checks (`AgentContainer` inspect check, `SharedFolder.verify()`, real-container tests) must pass on it before any run.** |
+| Context length | (not recorded) | 262144 (full), KV cache 323,797 tokens per server (15.2 GiB), concurrency 1.24× at full length |
+| Attention / all-reduce | (not recorded) | `TRITON_ATTN` (forced: heterogeneous head dims, FA4 unavailable); TP all-reduce `PYNCCL` only |
+
+Effect: the model, weights revision and vLLM version are the same, but kernels (arch-specific Marlin w4a16 and attention backends) and the tensor-parallel reduction order differ. So logits are not bit-identical and sampled trajectories are not reproducible token for token across servers. Runs from the two servers should be reported as separate batches (or the server added as a factor), not pooled silently. Activation replay is unaffected in method (it replays recorded token IDs), but it should state which server produced them.
+
+## 1a. Status — night of Sat 7 → Sun 8 Nov 2026 (HISTORICAL, old server)
 
 Much of the roadmap in section 7 is now historical (step 1, isolation, rounds/points, communication, cover tasks, the endpoint and trajectory/token logging are all built and running). Current live state:
 

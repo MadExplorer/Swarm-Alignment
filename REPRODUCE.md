@@ -1,0 +1,188 @@
+# REPRODUCE.md
+
+Exact commands, versions and outputs for reproducing the sandbox. The server is reached through the SSH alias `tl2` (address only in `~/.ssh/config`, never in this repo).
+
+## 1. Server `tl2` (from Sun 8 Nov 2026)
+
+Recon, 8 Nov 2026 13:35 UTC (read-only):
+
+- KVM VM, Ubuntu 22.04.5 LTS, kernel 6.8.0-59-generic, 184 vCPUs, 296 GiB RAM, no swap, `/` 497 G (488 G free).
+- 4 × NVIDIA GeForce RTX 5090, 32 607 MiB each (compute capability 12.0, sm_120), driver 580.95.05 (`nvidia-driver-580-server-open`), `nvidia-smi` CUDA version 13.0.
+- Host Python 3.10.12. Docker Engine 28.1.1 (build 4eba377).
+- `/etc/docker/daemon.json` registers an `nvidia` runtime (`nvidia-container-runtime`) and the apt source `nvidia-container-toolkit.list` exists, but **the NVIDIA Container Toolkit is not installed** (no `nvidia-container-runtime`, `nvidia-ctk` or `nvidia-container-cli`; apt candidate 1.20.1-1). `docker run --gpus` needs it.
+
+## 2. Image `agents:v1.1` on `tl2`
+
+Built by the team lead on tl2. This is **not the same image** as `agents:v1.1` on the old server (that one had `WORKDIR /usr/src/app`, a 184-byte Dockerfile and `CMD ["bash", "-c", "while true; do sleep 3600; done"]`).
+
+**The agents' container image changed, not only the vLLM side.** Agents now run in a `python:3.12` (3.12.16, Debian trixie) image with working directory `/app` (which holds the image's Dockerfile, readable by agents). Package versions, shell startup files (`/etc/profile`, `/etc/profile.d`, which the shared-folder `umask 0007` relies on) and available CLI tools (which the cover tasks rely on) may differ from the old image. **The harness startup checks (`AgentContainer` inspect check, `SharedFolder.verify()`, the real-container tests) must pass on this image before any run.**
+
+```
+$ ssh tl2 'docker image inspect --format "{{.Id}} {{.Created}} {{json .RepoDigests}}" agents:v1.1'
+sha256:3223d5d2e68ba4be7d68cfa65272f8950d3ce8842601cdbb9b0fdc32a69d7bd5 2026-11-08T12:52:00.988896994Z []
+```
+
+Config: `WORKDIR /app`, `CMD ["sleep","infinity"]`, no `USER` (runs as root), env `PYTHON_VERSION=3.12.16`, `LANG=C.UTF-8`.
+
+### Dockerfile
+
+`docker run --rm --network none agents:v1.1 cat /usr/src/app/Dockerfile` → `cat: /usr/src/app/Dockerfile: No such file or directory`. The file is at `/app/Dockerfile` (the only file in `/app`, 192 bytes, sha256 `810d225155e3db050133de6261cb4e18acbe9ff22551de02559329d1e536e5af`):
+
+```
+$ ssh tl2 'docker run --rm --network none agents:v1.1 cat /app/Dockerfile'
+FROM python:3.12
+
+WORKDIR /app
+
+# Если есть зависимости:
+# COPY requirements.txt .
+# RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["sleep", "infinity"]
+
+```
+
+(The Russian comment reads "If there are dependencies:".) `python:3.12` resolved to Python 3.12.16 on Debian trixie (full image, not slim: includes gcc, git, curl, etc.).
+
+### Build history
+
+```
+$ ssh tl2 'docker history --no-trunc --format "{{.ID}} | {{.CreatedAt}} | {{.Size}} | {{.CreatedBy}}" agents:v1.1'
+sha256:3223d5d2e68ba4be7d68cfa65272f8950d3ce8842601cdbb9b0fdc32a69d7bd5 | 2026-11-08T12:52:00Z | 0B | CMD ["sleep" "infinity"]
+<missing> | 2026-11-08T12:52:00Z | 192B | COPY . . # buildkit
+<missing> | 2026-11-08T12:52:00Z | 0B | WORKDIR /app
+<missing> | 2026-11-05T09:40:41Z | 0B | CMD ["python3"]
+<missing> | 2026-11-05T09:40:41Z | 36B | RUN /bin/sh -c set -eux;  for src in idle3 pip3 pydoc3 python3 python3-config; do   dst="$(echo "$src" | tr -d 3)";   [ -s "/usr/local/bin/$src" ];   [ ! -e "/usr/local/bin/$dst" ];   ln -svT "$src" "/usr/local/bin/$dst";  done # buildkit
+<missing> | 2026-11-05T09:40:41Z | 68.5MB | RUN /bin/sh -c set -eux;   wget -O python.tar.xz "https://www.python.org/ftp/python/${PYTHON_VERSION%%[a-z]*}/Python-$PYTHON_VERSION.tar.xz";  echo "$PYTHON_SHA256 *python.tar.xz" | sha256sum -c -;  wget -O python.tar.xz.asc "https://www.python.org/ftp/python/${PYTHON_VERSION%%[a-z]*}/Python-$PYTHON_VERSION.tar.xz.asc";  GNUPGHOME="$(mktemp -d)"; export GNUPGHOME;  gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$GPG_KEY";  gpg --batch --verify python.tar.xz.asc python.tar.xz;  gpgconf --kill all;  rm -rf "$GNUPGHOME" python.tar.xz.asc;  mkdir -p /usr/src/python;  tar --extract --directory /usr/src/python --strip-components=1 --file python.tar.xz;  rm python.tar.xz;   cd /usr/src/python;  gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)";  ./configure   --build="$gnuArch"   --enable-loadable-sqlite-extensions   --enable-optimizations   --enable-option-checking=fatal   --enable-shared   $(test "${gnuArch%%-*}" != 'riscv64' && echo '--with-lto')   --with-ensurepip  ;  nproc="$(nproc)";  EXTRA_CFLAGS="$(dpkg-buildflags --get CFLAGS)";  LDFLAGS="$(dpkg-buildflags --get LDFLAGS)";  arch="$(dpkg --print-architecture)"; arch="${arch##*-}";  case "$arch" in   amd64|arm64)    EXTRA_CFLAGS="${EXTRA_CFLAGS:-} -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer";    ;;   i386)    ;;   *)    EXTRA_CFLAGS="${EXTRA_CFLAGS:-} -fno-omit-frame-pointer";    ;;  esac;  make -j "$nproc"   "EXTRA_CFLAGS=${EXTRA_CFLAGS:-}"   "LDFLAGS=${LDFLAGS:-}"  ;  rm python;  make -j "$nproc"   "EXTRA_CFLAGS=${EXTRA_CFLAGS:-}"   "LDFLAGS=${LDFLAGS:-} -Wl,-rpath='\$\$ORIGIN/../lib'"   python  ;  make install;   bin="$(readlink -ve /usr/local/bin/python3)";  dir="$(dirname "$bin")";  mkdir -p "/usr/share/gdb/auto-load/$dir";  cp -vL Tools/gdb/libpython.py "/usr/share/gdb/auto-load/$bin-gdb.py";   cd /;  rm -rf /usr/src/python;   find /usr/local -depth   \(    \( -type d -a \( -name test -o -name tests -o -name idle_test \) \)    -o \( -type f -a \( -name '*.pyc' -o -name '*.pyo' -o -name 'libpython*.a' \) \)   \) -exec rm -rf '{}' +  ;   ldconfig;   export PYTHONDONTWRITEBYTECODE=1;  python3 --version;  pip3 --version # buildkit
+<missing> | 2026-11-05T09:33:06Z | 0B | ENV PYTHON_SHA256=b5796915dc45ff745cfb4e990a7e7c93d6f546328a102ce31448d69ebc37575c
+<missing> | 2026-11-05T09:33:06Z | 0B | ENV PYTHON_VERSION=3.12.16
+<missing> | 2026-11-05T09:33:06Z | 0B | ENV GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305
+<missing> | 2026-11-05T09:33:06Z | 17.8MB | RUN /bin/sh -c set -eux;  apt-get update;  apt-get install -y --no-install-recommends   libbluetooth-dev   tk-dev   uuid-dev  ;  apt-get dist-clean # buildkit
+<missing> | 2026-11-05T09:33:06Z | 0B | ENV LANG=C.UTF-8
+<missing> | 2026-11-05T09:33:06Z | 0B | ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+<missing> | 2026-11-05T08:53:46Z | 658MB | RUN /bin/sh -c set -ex;  apt-get update;  apt-get install -y --no-install-recommends   autoconf   automake   bzip2   default-libmysqlclient-dev   dpkg-dev   file   g++   gcc   imagemagick   libbz2-dev   libc6-dev   libcurl4-openssl-dev   libdb-dev   libevent-dev   libffi-dev   libgdbm-dev   libglib2.0-dev   libgmp-dev   libjpeg-dev   libkrb5-dev   liblzma-dev   libmagickcore-dev   libmagickwand-dev   libmaxminddb-dev   libncurses5-dev   libncursesw5-dev   libpng-dev   libpq-dev   libreadline-dev   libsqlite3-dev   libssl-dev   libtool   libwebp-dev   libxml2-dev   libxslt-dev   libyaml-dev   make   patch   unzip   xz-utils   zlib1g-dev  ;  apt-get dist-clean # buildkit
+<missing> | 2026-11-05T08:31:50Z | 185MB | RUN /bin/sh -c set -eux;  apt-get update;  apt-get install -y --no-install-recommends   git   mercurial   openssh-client   subversion     procps  ;  apt-get dist-clean # buildkit
+<missing> | 2026-11-05T07:38:24Z | 60.2MB | RUN /bin/sh -c set -eux;  apt-get update;  apt-get install -y --no-install-recommends   ca-certificates   curl   gnupg   netbase   sq   wget  ;  apt-get dist-clean # buildkit
+<missing> | 2026-11-04T21:23:39Z | 120MB | # debian.sh --arch 'amd64' out/ 'trixie' '@1793827419'
+```
+
+## 3. NVIDIA Container Toolkit on tl2
+
+Sun 8 Nov 2026, approved by Ivan:
+
+```
+$ ssh tl2 'apt-get install -y nvidia-container-toolkit=1.20.1-1 nvidia-container-toolkit-base=1.20.1-1 libnvidia-container-tools=1.20.1-1 libnvidia-container1=1.20.1-1'
+The following NEW packages will be installed:
+  libnvidia-container-tools libnvidia-container1 nvidia-container-toolkit
+  nvidia-container-toolkit-base
+The following held packages will be changed:
+  libnvidia-container-tools libnvidia-container1 nvidia-container-toolkit
+  nvidia-container-toolkit-base
+0 upgraded, 4 newly installed, 0 to remove and 327 not upgraded.
+E: Held packages were changed and -y was used without --allow-change-held-packages.
+```
+
+Nothing was installed. `apt-mark showhold` lists 1488 held packages: a blanket hold on every `cuda-*`, `nvidia-*` and `libnvidia*` package (driver included), apparently set by the VM template. dpkg logs show no earlier toolkit install.
+
+Then, approved by Ivan with checks (dry run first):
+
+```
+$ ssh tl2 'apt-get install -s --allow-change-held-packages nvidia-container-toolkit=1.20.1-1 nvidia-container-toolkit-base=1.20.1-1 libnvidia-container-tools=1.20.1-1 libnvidia-container1=1.20.1-1'
+0 upgraded, 4 newly installed, 0 to remove and 327 not upgraded.
+Inst libnvidia-container1 (1.20.1-1 NVIDIA CUDA:developer.download.nvidia.com [amd64])
+Inst libnvidia-container-tools (1.20.1-1 NVIDIA CUDA:developer.download.nvidia.com [amd64])
+Inst nvidia-container-toolkit-base (1.20.1-1 NVIDIA CUDA:developer.download.nvidia.com [amd64])
+Inst nvidia-container-toolkit (1.20.1-1 NVIDIA CUDA:developer.download.nvidia.com [amd64])
+
+$ ssh tl2 'DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-change-held-packages <same 4 packages, same versions>'
+0 upgraded, 4 newly installed, 0 to remove and 327 not upgraded.
+...
+Setting up nvidia-container-toolkit (1.20.1-1) ...   # also enabled nvidia-cdi-refresh.path/.service
+```
+
+Checks afterwards:
+- `nvidia-smi`: driver still 580.95.05, 4 × RTX 5090 32607 MiB.
+- `dpkg -l`: `ii` for the four packages at 1.20.1-1; `nvidia-ctk --version` → 1.20.1.
+- **`apt-mark showhold` no longer lists the four installed packages**: `--allow-change-held-packages` dropped their hold (the other ~1484 holds, driver included, are unchanged).
+- Smoke test `docker run --rm --network none --gpus '"device=0,1"' agents:v1.1 nvidia-smi -L` → `could not select device driver "" with capabilities: [[gpu]]`. Fix (approved): backup `/root/repro/backup/daemon.json.20261108-pre-nvidia-ctk`, `nvidia-ctk runtime configure --runtime=docker` (daemon.json unchanged, it already had the `nvidia` runtime), `systemctl restart docker` (0 containers running). dockerd registers the `--gpus` driver only at startup. After that the smoke test lists GPU 0 and GPU 1. Exit 0.
+
+## 4. vLLM containers on tl2 (Ivan's, Sun 8 Nov 2026)
+
+```
+ssh tl2 'mkdir -p /root/repro/vllm/logs /root/repro/hf-cache'
+ssh tl2 'tmux new-session -d -s repro -n vllm0 && tmux new-window -t repro -n vllm1'
+ssh tl2 "docker run -d --name Agents  --gpus '\"device=0,1\"' --shm-size 16g -p 127.0.0.1:8000:8000 -v /root/repro/vllm:/vllm -v /root/repro/hf-cache:/root/.cache/huggingface agents:v1.1"
+ssh tl2 "docker run -d --name Agents2 --gpus '\"device=2,3\"' --shm-size 16g -p 127.0.0.1:8001:8000 -v /root/repro/vllm:/vllm -v /root/repro/hf-cache:/root/.cache/huggingface agents:v1.1"
+```
+
+`Agents` sees host GPUs 0,1 (UUIDs GPU-2ea4d6f6…, GPU-0e707d32…); `Agents2` sees host GPUs 2,3 (GPU-85c768d9…, GPU-d19e55f8…). Ports published on host 127.0.0.1 only. `--shm-size 16g` instead of `--ipc=host` so the two servers share no IPC namespace. The shared venv (`/root/repro/vllm/venv`) and the HF cache (`/root/repro/hf-cache`) are the only shared folders.
+
+Shared venv, installed once from `Agents` (log `/root/repro/vllm/logs/install-3c.log`):
+
+```
+ssh tl2 "docker exec Agents bash -c 'python -m venv /vllm/venv && /vllm/venv/bin/pip install vllm==0.33.0 && /vllm/venv/bin/vllm download-kernels && /vllm/venv/bin/pip freeze > /vllm/freeze.txt && /vllm/venv/bin/python -c \"import torch,vllm;print(vllm.__version__,torch.__version__,torch.version.cuda,torch.cuda.get_arch_list(),torch.cuda.get_device_capability())\"'"
+```
+
+Result (exit 0, no errors or warnings in the log; venv 19 G):
+
+```
+0.33.0 2.14.0+cu130 13.0 ['sm_75', 'sm_80', 'sm_86', 'sm_90', 'sm_100', 'sm_120'] (12, 0)
+```
+
+`vllm download-kernels` installed `flashinfer-jit-cache 0.7.2.post1+cu130` (incl. `flashinfer-jit-cache-sm120f`). Key versions from `/root/repro/vllm/freeze.txt` (207 packages): vllm 0.33.0, torch 2.14.0, triton 3.8.0, transformers 5.20.2, compressed-tensors 0.17.0, flashinfer-python / flashinfer-cubin 0.7.2.post1, nvidia-nccl-cu13 2.30.7, xgrammar 0.2.8. Pip inside the image: 25.0.1.
+
+### Model access and serve command
+
+The model repo is ungated and public, so no HF token is used anywhere:
+
+```
+$ ssh tl2 'curl -s https://huggingface.co/api/models/google/gemma-4-31B-it-qat-w4a16-ct | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get(\"gated\"), d.get(\"private\"))"'
+False False
+```
+
+`Agents`, in tmux `repro:vllm0` inside `docker exec -it Agents bash` (started 14:13 UTC; downloads the weights into the shared HF cache, unauthenticated):
+
+```
+cd /tmp && /vllm/venv/bin/vllm serve google/gemma-4-31B-it-qat-w4a16-ct --revision 52f3f65bc7a02d555763bc923bd1d9094898219d --port 8000 --tensor-parallel-size 2 --served-model-name Foxtrot Keter Malina Cringe Cat --enable-auto-tool-choice --tool-call-parser gemma4 2>&1 | tee /vllm/logs/Agents-serve.log
+```
+
+`Agents` ready after 220 s (first start, including the weight download). Key log lines (`/root/repro/vllm/logs/Agents-serve.log`):
+
+```
+Gemma4 model has heterogeneous head dimensions {'sliding_attention': 256, 'full_attention': 512}. FA4 not available, forcing TRITON_ATTN backend.
+world_size=2 ... backend=nccl
+Using ['PYNCCL'] all-reduce backends (in dispatch order) for group 'tp:0' out of potential backends: ['FLASHINFER_PCIE_IPC', 'FLASHINFER', 'NCCL_SYMM_MEM', 'QUICK_REDUCE', 'AITER_CUSTOM', 'CUSTOM', 'SYMM_MEM', 'PYNCCL'].
+Using AttentionBackendEnum.TRITON_ATTN backend.
+Model loading took 10.66 GiB memory and 80.0 seconds
+Available KV cache memory: 15.2 GiB
+GPU KV cache size: 323,797 tokens, Maximum concurrency for 262,144 tokens per request: 1.24x
+```
+
+So the **full 262144 context fits**: no `--max-model-len` set. **NCCL did not hang**: no `NCCL_P2P_DISABLE`. Effective `--gpu-memory-utilization` 0.92 (vLLM's CUDA-graph-profiling default; equivalent to 0.8672 without it). dtype bfloat16, `quantization=compressed-tensors`, `kv_cache_dtype=auto`, `enable_prefix_caching=True`, seed 0, no reasoning parser.
+
+`Agents2`, in tmux `repro:vllm1` inside `docker exec -it Agents2 bash`, started after the download, offline:
+
+```
+cd /tmp && HF_HUB_OFFLINE=1 /vllm/venv/bin/vllm serve google/gemma-4-31B-it-qat-w4a16-ct --revision 52f3f65bc7a02d555763bc923bd1d9094898219d --port 8000 --tensor-parallel-size 2 --served-model-name Foxtrot Keter Malina Cringe Cat --enable-auto-tool-choice --tool-call-parser gemma4 2>&1 | tee /vllm/logs/Agents2-serve.log
+```
+
+Ready after 170 s (weights from cache in 6.8 s); same KV cache figures. The engine config lines of the two logs are byte-identical except `model=`/`tokenizer=`, which offline mode resolves to the local snapshot path `.../models--google--gemma-4-31B-it-qat-w4a16-ct/snapshots/52f3f65bc7a02d555763bc923bd1d9094898219d` (same revision). That is why their torch.compile cache hashes differ (`1911cc154b` vs `4f47608679`).
+
+## 5. Endpoint checks from the host (step 4)
+
+Script piped over stdin (`ssh tl2 'python3 -I -' <<'EOF' ...`), stdlib only, nothing written on tl2. Same request to both: model `Keter`, user message "Reply with exactly: the sandbox is ready.", `max_tokens 24`, `temperature 0`, `return_token_ids: true`.
+
+```
+[8000] /v1/models 200: ids=['Foxtrot', 'Keter', 'Malina', 'Cringe', 'Cat'] max_model_len=262144 root=google/gemma-4-31B-it-qat-w4a16-ct
+[8000] chat 200: model=Foxtrot content='the sandbox is ready.' finish=stop
+[8000] prompt_token_ids: 22 (first 8 [2, 105, 2364, 107, 40654, 607, 7121, 236787]); completion token_ids: 6 [1437, 114276, 563, 5508, 236761, 106]
+[8000] /detokenize 200: 'the sandbox is ready.<turn|>'
+[8000] /detokenize(prompt) 200: '<bos><|turn>user\nReply with exactly: the sandbox is ready.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>'
+[8001] (identical lines)
+prompt ids identical across servers: True
+completion ids identical across servers: True
+```
+
+`/detokenize` of the completion includes the end-of-turn token `<turn|>` (id 106), which `content` omits; otherwise identical. The response `model` field is `Foxtrot` for every alias (as on the old server). The rendered prompt ends with the empty thought channel `<|channel>thought\n<channel|>`, the same as on the old server.
