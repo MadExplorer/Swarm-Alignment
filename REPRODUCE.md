@@ -345,3 +345,63 @@ swarm-run --variant C --prefix D --commit 48ad622 --order collusive:8,honest:8,c
 ```
 
 Port 8000 (tie: A on 8000, C on 8001), container `repro4`, code `/root/repro/host-D` (58 files, hash check OK), tmux `repro:runD`, console `host-runs/D-console.log`. First folder `D-20261108-192051-collusive` (`variant D`, `judge_blocks: true`, shared folder off, full launch record in `run_meta.json`).
+
+## 16. The old server's agent image (`tl`, read-only; Mon 9 Nov 2026)
+
+`tl` has no containers any more; its images remain. Read with one throwaway, network-less container (`docker run --rm --network none agents:v1.1 …`, removed after; 0 containers afterwards) and `docker history` (read-only). No `docker save`.
+
+```
+$ ssh tl 'docker image inspect --format "{{.Id}} {{.Created}} {{json .Config.Cmd}} {{json .Config.WorkingDir}}" agents:v1.1 agents:v1.0'
+sha256:40ff0b3c1497f4926156f2a03ab2b923838589b85cca265c601a63c604872d05 2026-11-06T13:33:46.770739261Z ["bash","-c","while true; do sleep 3600; done"] "/usr/src/app"
+sha256:781ba2fd8f2bf89e281991d9118f9d464c8cd284c576eb834ce47007eccbad73 2026-11-06T13:02:03.180145264Z ["bash","-c","while true; do sleep 3600; done"] "/usr/src/app"
+```
+
+`/usr/src/app` in `agents:v1.1`: `Dockerfile` (184 B) and an empty `requirements.txt`.
+
+```
+$ ssh tl 'docker run --rm --network none agents:v1.1 cat /usr/src/app/Dockerfile'
+FROM python:3.12
+
+WORKDIR /usr/src/app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+
+
+
+CMD ["bash", "-c", "while true; do sleep 3600; done"]
+
+```
+
+Build history of `agents:v1.1` (the image the old runs used):
+
+```
+$ ssh tl 'docker history --no-trunc --format "{{.ID}} | {{.CreatedAt}} | {{.Size}} | {{.CreatedBy}}" agents:v1.1'
+sha256:40ff0b3c1497f4926156f2a03ab2b923838589b85cca265c601a63c604872d05 | 2026-11-06T13:33:46Z | 0B | CMD ["bash" "-c" "while true; do sleep 3600; done"]
+<missing> | 2026-11-06T13:33:46Z | 184B | COPY . . # buildkit
+<missing> | 2026-11-06T13:33:46Z | 8.09MB | RUN /bin/sh -c pip install --no-cache-dir -r requirements.txt # buildkit
+<missing> | 2026-11-06T13:33:44Z | 0B | COPY requirements.txt ./ # buildkit
+<missing> | 2026-11-06T13:33:44Z | 0B | WORKDIR /usr/src/app
+<missing> | 2026-11-05T09:40:41Z | 0B | CMD ["python3"]
+<missing> | 2026-11-05T09:40:41Z | 36B | RUN /bin/sh -c set -eux;  for src in idle3 pip3 pydoc3 python3 python3-config; do   dst="$(echo "$src" | tr -d 3)";   [ -s "/usr/local/bin/$src" ];   [ ! -e "/usr/local/bin/$dst" ];   ln -svT "$src" "/usr/local/bin/$dst";  done # buildkit
+<missing> | 2026-11-05T09:40:41Z | 68.5MB | RUN /bin/sh -c set -eux;   wget -O python.tar.xz "https://www.python.org/ftp/python/${PYTHON_VERSION%%[a-z]*}/Python-$PYTHON_VERSION.tar.xz";  echo "$PYTHON_SHA256 *python.tar.xz" | sha256sum -c -;  wget -O python.tar.xz.asc "https://www.python.org/ftp/python/${PYTHON_VERSION%%[a-z]*}/Python-$PYTHON_VERSION.tar.xz.asc";  GNUPGHOME="$(mktemp -d)"; export GNUPGHOME;  gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$GPG_KEY";  gpg --batch --verify python.tar.xz.asc python.tar.xz;  gpgconf --kill all;  rm -rf "$GNUPGHOME" python.tar.xz.asc;  mkdir -p /usr/src/python;  tar --extract --directory /usr/src/python --strip-components=1 --file python.tar.xz;  rm python.tar.xz;   cd /usr/src/python;  gnuArch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)";  ./configure   --build="$gnuArch"   --enable-loadable-sqlite-extensions   --enable-optimizations   --enable-option-checking=fatal   --enable-shared   $(test "${gnuArch%%-*}" != 'riscv64' && echo '--with-lto')   --with-ensurepip  ;  nproc="$(nproc)";  EXTRA_CFLAGS="$(dpkg-buildflags --get CFLAGS)";  LDFLAGS="$(dpkg-buildflags --get LDFLAGS)";  arch="$(dpkg --print-architecture)"; arch="${arch##*-}";  case "$arch" in   amd64|arm64)    EXTRA_CFLAGS="${EXTRA_CFLAGS:-} -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer";    ;;   i386)    ;;   *)    EXTRA_CFLAGS="${EXTRA_CFLAGS:-} -fno-omit-frame-pointer";    ;;  esac;  make -j "$nproc"   "EXTRA_CFLAGS=${EXTRA_CFLAGS:-}"   "LDFLAGS=${LDFLAGS:-}"  ;  rm python;  make -j "$nproc"   "EXTRA_CFLAGS=${EXTRA_CFLAGS:-}"   "LDFLAGS=${LDFLAGS:-} -Wl,-rpath='\$\$ORIGIN/../lib'"   python  ;  make install;   bin="$(readlink -ve /usr/local/bin/python3)";  dir="$(dirname "$bin")";  mkdir -p "/usr/share/gdb/auto-load/$dir";  cp -vL Tools/gdb/libpython.py "/usr/share/gdb/auto-load/$bin-gdb.py";   cd /;  rm -rf /usr/src/python;   find /usr/local -depth   \(    \( -type d -a \( -name test -o -name tests -o -name idle_test \) \)    -o \( -type f -a \( -name '*.pyc' -o -name '*.pyo' -o -name 'libpython*.a' \) \)   \) -exec rm -rf '{}' +  ;   ldconfig;   export PYTHONDONTWRITEBYTECODE=1;  python3 --version;  pip3 --version # buildkit
+<missing> | 2026-11-05T09:33:06Z | 0B | ENV PYTHON_SHA256=b5796915dc45ff745cfb4e990a7e7c93d6f546328a102ce31448d69ebc37575c
+<missing> | 2026-11-05T09:33:06Z | 0B | ENV PYTHON_VERSION=3.12.16
+<missing> | 2026-11-05T09:33:06Z | 0B | ENV GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305
+<missing> | 2026-11-05T09:33:06Z | 17.8MB | RUN /bin/sh -c set -eux;  apt-get update;  apt-get install -y --no-install-recommends   libbluetooth-dev   tk-dev   uuid-dev  ;  apt-get dist-clean # buildkit
+<missing> | 2026-11-05T09:33:06Z | 0B | ENV LANG=C.UTF-8
+<missing> | 2026-11-05T09:33:06Z | 0B | ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+<missing> | 2026-11-05T08:53:46Z | 658MB | RUN /bin/sh -c set -ex;  apt-get update;  apt-get install -y --no-install-recommends   autoconf   automake   bzip2   default-libmysqlclient-dev   dpkg-dev   file   g++   gcc   imagemagick   libbz2-dev   libc6-dev   libcurl4-openssl-dev   libdb-dev   libevent-dev   libffi-dev   libgdbm-dev   libglib2.0-dev   libgmp-dev   libjpeg-dev   libkrb5-dev   liblzma-dev   libmagickcore-dev   libmagickwand-dev   libmaxminddb-dev   libncurses5-dev   libncursesw5-dev   libpng-dev   libpq-dev   libreadline-dev   libsqlite3-dev   libssl-dev   libtool   libwebp-dev   libxml2-dev   libxslt-dev   libyaml-dev   make   patch   unzip   xz-utils   zlib1g-dev  ;  apt-get dist-clean # buildkit
+<missing> | 2026-11-05T08:31:50Z | 185MB | RUN /bin/sh -c set -eux;  apt-get update;  apt-get install -y --no-install-recommends   git   mercurial   openssh-client   subversion     procps  ;  apt-get dist-clean # buildkit
+<missing> | 2026-11-05T07:38:24Z | 60.2MB | RUN /bin/sh -c set -eux;  apt-get update;  apt-get install -y --no-install-recommends   ca-certificates   curl   gnupg   netbase   sq   wget  ;  apt-get dist-clean # buildkit
+<missing> | 2026-11-04T21:23:39Z | 120MB | # debian.sh --arch 'amd64' out/ 'trixie' '@1793827419'
+```
+
+(`agents:v1.0`, built 13:02 UTC the same day, has the same top-level config; its history is in the backup notes, not needed here.)
+
+**Old vs new agent image:**
+- **Same base:** the 13 `python:3.12` base layers (Python 3.12.16, built 2026-11-05) match the new image `3223d5d2e68b` exactly in date, size and command.
+- **The only differences** are the top layers: `WORKDIR /usr/src/app` vs `/app`; the old image's `pip install -r requirements.txt` of an empty file (an 8.09 MB layer); the keep-alive command (`bash -c "while true; do sleep 3600; done"` vs `sleep infinity`); and the copied build-context files (the Dockerfile, plus the empty `requirements.txt` in the old one).

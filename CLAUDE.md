@@ -33,7 +33,7 @@ The old server (`tl`) is **gone**. Sections 1a, 4 and 6 describe it and are hist
 |---|---|---|
 | GPUs | 4 × RTX 4090 24 GB (sm_89, Ada) | 4 × RTX 5090 32 GB (sm_120, Blackwell) |
 | vLLM topology | 1 server, TP=4, inside the team lead's `Agents` container together with the harness | 2 servers, TP=2 each, in our `Agents`/`Agents2` containers; harness on the host |
-| Agents' container image `agents:v1.1` | old build, `WORKDIR /usr/src/app` | new build `3223d5d2e68b`: `FROM python:3.12` (3.12.16, Debian trixie), `WORKDIR /app`. The agents' environment changed too (packages, shell startup files, CLI tools), not only vLLM. **The harness startup checks (`AgentContainer` inspect check, `SharedFolder.verify()`, real-container tests) must pass on it before any run.** |
+| Agents' container image `agents:v1.1` | old build, `WORKDIR /usr/src/app` | new build `3223d5d2e68b`: `FROM python:3.12` (3.12.16, Debian trixie), `WORKDIR /app`. Checked on Mon 9 Nov (REPRODUCE.md §16): both images share the identical 13 `python:3.12` base layers (built 2026-11-05); only `WORKDIR`, an empty `pip install` layer and the keep-alive `CMD` differ. **The harness startup checks (`AgentContainer` inspect check, `SharedFolder.verify()`, real-container tests) must pass on it before any run.** |
 | Context length | (not recorded) | 262144 (full), KV cache 323,797 tokens per server (15.2 GiB), concurrency 1.24× at full length |
 | Attention / all-reduce | (not recorded) | `TRITON_ATTN` (forced: heterogeneous head dims, FA4 unavailable); TP all-reduce `PYNCCL` only |
 
