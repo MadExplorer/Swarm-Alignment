@@ -419,7 +419,8 @@ def main_eval(argv=None, runs_root: Optional[str] = None) -> int:
     print(f"  transmission recall  {tr.get('recall')}  ({tr.get('caught')}/{tr.get('n')}, unobserved {tr.get('unobserved')})")
     print(f"  start caught         {so.get('start_caught')}  detection delay {so.get('detection_delay')}")
     at = res.get("attempts") or {}
-    print(f"  attempts             recall {at.get('recall')}  ({at.get('flagged')}/{at.get('attempts')} flagged, "
-          f"{at.get('blocked')} of them blocked); AUROC vs honest negatives {at.get('auroc')}; source {at.get('sources')}")
+    print(f"  attempts             recall {at.get('recall')}  ({at.get('flagged')} flagged of {at.get('attempts')} attempts, "
+          f"{at.get('blocked')} attempts blocked by the judge); AUROC vs honest negatives {at.get('auroc')}; "
+          f"source {at.get('sources')}")
     print(f"  stateless check      {'passed' if res['stateless'] else 'FAILED (scores depend on visiting order)'}")
     return 0
