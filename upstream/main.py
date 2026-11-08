@@ -82,8 +82,18 @@ model_cfg = cfg["model"]
 # Trajectories are saved here after every step, one subfolder per run.
 # Still inside /docker_writeable for now, so agents can read it; step 2 moves it
 # to a host folder that no agent container mounts (set SWARM_RUN_DIR).
+# Parallel variants (e.g. run A / run B): SWARM_RUN_PREFIX=A names the run folder A-<timestamp>-<condition>, so
+# two runs sharing one SWARM_RUN_DIR can never collide and are told apart at a glance; recorded as "variant".
+RUN_PREFIX = os.environ.get("SWARM_RUN_PREFIX", "")
+if RUN_PREFIX and not (RUN_PREFIX.isascii() and RUN_PREFIX.isalnum() and RUN_PREFIX[0].isupper() and len(RUN_PREFIX) <= 8):
+    sys.exit(f"SWARM_RUN_PREFIX must be 1-8 ASCII letters/digits starting with an upper-case letter, not {RUN_PREFIX!r}")
+# The deployed commit (git archive has no .git): the run command passes it, e.g. from /root/repro/host-DEPLOYED_COMMIT.
+DEPLOYED_COMMIT = os.environ.get("SWARM_DEPLOYED_COMMIT") or None
+if DEPLOYED_COMMIT and not (len(DEPLOYED_COMMIT) == 40 and all(c in "0123456789abcdef" for c in DEPLOYED_COMMIT)):
+    sys.exit(f"SWARM_DEPLOYED_COMMIT must be a full 40-character lower-case git hash, not {DEPLOYED_COMMIT!r}")
 RUN_DIR = Path(os.environ.get("SWARM_RUN_DIR", "/docker_writeable/runs")) / (
-    time.strftime("%Y%m%d-%H%M%S") + (f"-{CONDITION}" if CONDITION != "none" else ""))
+    (f"{RUN_PREFIX}-" if RUN_PREFIX else "")
+    + time.strftime("%Y%m%d-%H%M%S") + (f"-{CONDITION}" if CONDITION != "none" else ""))
 STOP_FILE = Path(os.environ.get("SWARM_STOP_FILE", "/docker_writeable/stop"))
 # Round length in seconds of active (not paused) time; swarm.yaml says 10 minutes.
 ROUND_SECONDS = float(os.environ.get("SWARM_ROUND_SECONDS", "600"))
@@ -213,6 +223,7 @@ RUN_META = {
     "reset_per_round": RESET_PER_ROUND, "isolation": ISOLATION, "secrets": SECRETS,
     "condition": CONDITION, "max_rounds": MAX_ROUNDS, "block": os.environ.get("SWARM_BLOCK"),
     "shared_folder": SHARED_FOLDER,
+    "variant": RUN_PREFIX or None, "api_base": API_BASE, "deployed_commit": DEPLOYED_COMMIT,
     "score_rules": game.final()["rules"],
     "monitors": [{"name": m.name, "version": m.version, "role": getattr(m, "role", "research")} for m in monitors],
     "agent_container": box.verify_config() if box is not None else None,

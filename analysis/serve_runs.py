@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from load_run import score_breakdown
 
-RUN_RE = re.compile(r"\d{8}-\d{6}(-[a-z]+)?\Z")
+RUN_RE = re.compile(r"([A-Z][A-Za-z0-9]{0,7}-)?\d{8}-\d{6}(-[a-z]+)?\Z")   # optional variant prefix (SWARM_RUN_PREFIX)
 AGENT_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,31}\Z")
 LIVE_SECONDS = 600            # no run_end.json and a file changed within this time: "running"
 DEFAULT_TOOL_CAP = 2000
@@ -77,7 +77,9 @@ class Unavailable(Exception):
 def read_jsonl(path: Path) -> list:
     """Parse a JSONL file that may be appended to right now: an incomplete last line is skipped."""
     out = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    # Split on "\n" only: str.splitlines() also breaks at \x85,  ,  , which json.dumps leaves unescaped
+    # inside strings (raw bytes of binary files in shared_events.jsonl); those records would be silently dropped.
+    for line in path.read_text(encoding="utf-8", errors="replace").split("\n"):
         if not line.strip():
             continue
         try:
@@ -139,7 +141,9 @@ class Runs:
             status = "finished" if end else ("running" if time.time() - newest < LIVE_SECONDS else "incomplete")
             trajs = [f.name for f in d.glob("*.traj.json")]
             rounds = max((int(m.group(1)) for f in trajs if (m := re.search(r"\.r(\d+)\.traj\.json\Z", f))), default=None)
-            out.append({"run": d.name, "condition": meta.get("condition") or "none", "status": status,
+            out.append({"run": d.name, "variant": meta.get("variant"), "shared_folder": meta.get("shared_folder"),
+                        "api_base": meta.get("api_base"), "deployed_commit": meta.get("deployed_commit"),
+                        "condition": meta.get("condition") or "none", "status": status,
                         "block": meta.get("block"), "started": meta.get("started"),
                         "ended": (end or {}).get("ended"), "rounds": (end or {}).get("rounds") or rounds,
                         "score": (end or {}).get("score"), "agents": meta.get("agents"),

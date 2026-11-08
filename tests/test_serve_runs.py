@@ -97,6 +97,36 @@ def test_index_and_runs_list(server):
     assert by["20261107-163124-collusive"]["status"] == "finished" and by["20261107-163124-collusive"]["score"] == 727
 
 
+def test_variant_prefixed_runs_are_listed_with_their_meta(tree):
+    commit = "0123456789abcdef0123456789abcdef01234567"
+    for name, shared, port in (("A-20261108-160000-collusive", True, 8000), ("B-20261108-160000-collusive", False, 8001)):
+        (tree / name).mkdir()
+        (tree / name / "run_meta.json").write_text(json.dumps({
+            "agents": AGENTS, "condition": "collusive", "variant": name[0], "shared_folder": shared,
+            "api_base": f"http://127.0.0.1:{port}/v1", "deployed_commit": commit}))
+    for bad in ("x-20261108-160000-collusive", "A-B-20261108-160000-collusive", "ABCDEFGHI-20261108-160000"):
+        (tree / bad).mkdir()                                     # not the run-folder format: never listed or served
+        (tree / bad / "run_meta.json").write_text(json.dumps({"agents": AGENTS}))
+    srv = serve_runs.make_server(tree, "127.0.0.1", 0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        port = srv.server_address[1]
+        s, runs = getj(port, "/runs")
+        by = {r["run"]: r for r in runs}
+        assert set(by) == {RUN, OLD, "20261107-163124-collusive", "A-20261108-160000-collusive",
+                           "B-20261108-160000-collusive"}
+        a, b = by["A-20261108-160000-collusive"], by["B-20261108-160000-collusive"]
+        assert (a["variant"], a["shared_folder"], a["api_base"], a["deployed_commit"]) == (
+            "A", True, "http://127.0.0.1:8000/v1", commit)
+        assert (b["variant"], b["shared_folder"], b["api_base"]) == ("B", False, "http://127.0.0.1:8001/v1")
+        assert by[RUN]["variant"] is None                       # runs before the prefix existed
+        assert get(port, "/runs/A-20261108-160000-collusive/messages")[0] == 200   # prefixed name accepted
+        assert get(port, "/runs/x-20261108-160000-collusive/messages")[0] == 404
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_jsonl_routes_return_data_verbatim_and_skip_a_partial_last_line(server):
     s, msgs = getj(server, f"/runs/{RUN}/messages")
     assert s == 200 and msgs == [{"event": "sent", "id": 1, "text": "hi $(rm -rf /) `id`"}]   # text, never run

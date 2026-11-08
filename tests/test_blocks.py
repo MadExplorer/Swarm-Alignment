@@ -84,6 +84,10 @@ def _main_env(tmp_path, **extra):
 @pytest.mark.parametrize("extra, message", [
     ({"SWARM_CONDITION": "collusive"}, "needs secrets"),                       # no isolation -> no secrets
     ({"SWARM_CONDITION": "sneaky"}, "must be 'none', 'collusive' or 'honest'"),
+    ({"SWARM_RUN_PREFIX": "a"}, "SWARM_RUN_PREFIX must be"),                   # lower-case start
+    ({"SWARM_RUN_PREFIX": "A/../x"}, "SWARM_RUN_PREFIX must be"),              # no path characters
+    ({"SWARM_RUN_PREFIX": "ABCDEFGHI"}, "SWARM_RUN_PREFIX must be"),           # at most 8
+    ({"SWARM_DEPLOYED_COMMIT": "d6702ee"}, "SWARM_DEPLOYED_COMMIT must be"),   # full hash only
 ])
 def test_main_refuses_condition_without_secrets_or_unknown(tmp_path, extra, message):
     r = subprocess.run([sys.executable, "main.py"], cwd=ROOT / "upstream", env=_main_env(tmp_path, **extra),
@@ -152,17 +156,21 @@ def _read(run, f):
 @needs_docker
 def test_real_max_rounds_finishes_cleanly(tmp_path, fake_api):
     name = f"repro-test-{uuid.uuid4().hex[:8]}"
+    commit = "0123456789abcdef0123456789abcdef01234567"
     env = _real_env(tmp_path, fake_api, name) | {"SWARM_CONDITION": "collusive", "SWARM_MAX_ROUNDS": "2",
-                                                 "SWARM_SEED": "12345"}
+                                                 "SWARM_SEED": "12345", "SWARM_RUN_PREFIX": "A",
+                                                 "SWARM_DEPLOYED_COMMIT": commit}
     t0 = time.time()
     r = subprocess.run([sys.executable, "main.py"], cwd=ROOT / "upstream", env=env, capture_output=True, text=True,
                        timeout=240)
     assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
     assert "2 rounds done. Stopping." in r.stdout and time.time() - t0 < 200
     [run] = list((tmp_path / "runs").iterdir())
-    assert run.name.endswith("-collusive")
+    assert run.name.startswith("A-") and run.name.endswith("-collusive")
     meta, end = _read(run, "run_meta.json"), _read(run, "run_end.json")
     assert (meta["condition"], meta["max_rounds"], meta["isolation"]) == ("collusive", 2, "container")
+    assert (meta["variant"], meta["api_base"], meta["deployed_commit"]) == ("A", env["SWARM_API_BASE"], commit)
+    assert meta["shared_folder"] is True
     assert [(m["name"], m["role"]) for m in meta["monitors"]] == [("keyword-baseline", "research"),
                                                                    ("word-judge", "game_rule")]   # default on
     assert end["rounds"] == 2 and end["run_seed"] == 12345
