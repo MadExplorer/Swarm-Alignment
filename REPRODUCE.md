@@ -186,3 +186,70 @@ completion ids identical across servers: True
 ```
 
 `/detokenize` of the completion includes the end-of-turn token `<turn|>` (id 106), which `content` omits; otherwise identical. The response `model` field is `Foxtrot` for every alias (as on the old server). The rendered prompt ends with the empty thought channel `<|channel>thought\n<channel|>`, the same as on the old server.
+
+## 6. Host harness on tl2 (step 5)
+
+Deployed commit `d6702ee5ed4029d8ae600ead1b055c278d7f40d8` (branch `shared-folder`) to `/root/repro/host` with `git archive | ssh tl2 'tar -x -C /root/repro/host'`; commit recorded in `/root/repro/host-DEPLOYED_COMMIT`. Hash check: sha256 manifest built locally from the same archive, `sha256sum -c` on tl2 → **HASH OK, 40/40 files, 40 files on tl2**.
+
+Host venv `/root/repro/host-venv` (Python 3.10.12): `python3 -m venv /root/repro/host-venv && /root/repro/host-venv/bin/pip install -r /root/repro/host/deploy/requirements-host-py310.txt`. `pip freeze` (`/root/repro/host-venv-freeze.txt`, 101 packages) matches the requirements file exactly (after case/underscore normalisation). Toolkit apt hold restored: `apt-mark hold nvidia-container-toolkit nvidia-container-toolkit-base libnvidia-container-tools libnvidia-container1`.
+
+Tests:
+- Docker-free (`SWARM_TEST_IMAGE=repro-absent:none`): **328 passed, 24 skipped**. Skips: 18 Docker tests (by design), 3 evidence-run tests (no evidence on tl2), 3 `replay_activations` tests (no torch in the host venv).
+- Real-container on the agents' image (`SWARM_TEST_IMAGE=agents:v1.1`, `tests/test_isolation.py tests/test_shared_folder.py tests/test_blocks.py`): **55 passed, 4 failed, 3 errors**; no `repro-test-*` containers left. All 11 isolation tests pass. All 7 failures are `SharedFolder.verify()`: `RuntimeError: <b> cannot read and write a file of <a> in /shared` (`test_real_permissions`, `test_real_events_symlink_and_fifo`, `test_real_shared_task_folders`, `test_real_max_rounds_finishes_cleanly`, `test_real_blocks_back_to_back`, `test_real_run_agents_never_see_the_word_secret[collusive|honest]`). The umask check, which runs earlier, passes: `bash -lc` on this image does source `/etc/profile.d`.
+
+Cause: the host kernel setting `fs.protected_regular = 2` on tl2 (`/usr/lib/sysctl.d/99-protect-links.conf`, overriding systemd's `50-default.conf` value 1). With 2, an `O_CREAT` open (what `>>`/`>` do) of a file owned by someone else in a **sticky, group-writable** directory is refused unless the opener owns the directory; `/shared` is `3770 root:swarm`. `fs.*` sysctls are host-wide (not per container). The Mac's Docker VM, where these tests passed before, has `fs.protected_regular = 0`. The old server's value is unknown (the shared-folder version was never deployed there).
+
+### Fix: `fs.protected_regular` (Ivan's decision, option A, Sun 8 Nov 2026 ~14:45 UTC)
+
+```
+$ ssh tl2 'echo "before: $(sysctl -n fs.protected_regular)"; sysctl -w fs.protected_regular=1; echo "after: $(sysctl -n fs.protected_regular)"'
+before: 2
+fs.protected_regular = 1
+after: 1
+```
+
+- **Old value 2, new value 1. Runtime only, not persisted**: no file under `/etc/sysctl.d` was added, so a reboot restores 2.
+- Reason: with 2, the shared folder `/shared` (sticky, group-writable, `3770 root:swarm`) does not let one agent open another agent's file with `O_CREAT` (`>>`, `>`), which the shared-folder design requires. With 1 (systemd's default), only world-writable sticky folders such as `/tmp` keep that protection.
+- Undo: `ssh tl2 'sysctl -w fs.protected_regular=2'`.
+- After a reboot, `SharedFolder.verify()` refuses to start a run (`... cannot read and write a file of ... in /shared`) until it is set to 1 again.
+
+Real-container tests rerun (`SWARM_TEST_IMAGE=agents:v1.1`, same three files): **62 passed** in 123 s; no `repro-test-*` containers left.
+
+## 7. Evidence runs and endpoint on tl2 (step 6)
+
+All of `evidence/runs/` (14 run folders + `longrun-console.log`, `longrun2-console.log`; 739 files, 163 M) copied from Ivan's Mac to the new folder `/root/repro/host-runs`:
+
+```
+(cd evidence/runs && find . -type f ! -name .DS_Store | LC_ALL=C sort | tr '\n' '\0' | xargs -0 shasum -a 256) > manifest.txt
+ssh tl2 'mkdir /root/repro/host-runs'
+(cd evidence/runs && COPYFILE_DISABLE=1 tar -c --exclude .DS_Store -f - .) | ssh tl2 'tar -x -C /root/repro/host-runs'
+ssh tl2 'cd /root/repro/host-runs && sha256sum -c --quiet && echo HASH OK && find . -type f | wc -l' < manifest.txt
+```
+
+→ **HASH OK, 739/739 files**, no `._*` files (GNU tar printed `Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'` for macOS xattrs; harmless).
+
+Endpoint in tmux `repro:endpoint` (log `/root/repro/endpoint.log`):
+
+```
+cd /root/repro/host/analysis && /root/repro/host-venv/bin/python serve_runs.py --root /root/repro/host-runs --port 8765 2>&1 | tee -a /root/repro/endpoint.log
+```
+
+`curl 127.0.0.1:8765/runs` → 14 runs (e.g. `20261108-043719-honest`, finished, 12 rounds, score 5250); `tokens?decode=1` → HTTP 200 (decoded through vLLM `/detokenize` on 8000). Tunnel from the Mac: `ssh -L 8765:127.0.0.1:8765 tl2`.
+
+## 8. Two parallel runs: shared-state review (step 7)
+
+Per run (environment): `SWARM_API_BASE` (the word judge's LLM stage uses the same `API_BASE`), `SWARM_AGENT_CONTAINER` (`AgentContainer.start()` refuses an existing name), `SWARM_RUN_DIR`, `SWARM_STOP_FILE` (missing or not `false` = paused, fail-safe). Shared but read-only: the code `/root/repro/host`, `swarm.yaml` (`SWARM_CONFIG`), the image `agents:v1.1`, the host venv. Inside each agent container (`/tmp`, `/var/tmp`, `/run/lock`, `/dev/shm`, `/shared`, homes): separate per container. Host temp files (`cover_tasks.py` `tempfile.TemporaryDirectory`): unique per process. Seeds: `run_blocks.py` draws each from `os.urandom`. No ports are opened by the harness.
+
+**Must differ: `SWARM_RUN_DIR`.** The run folder is `SWARM_RUN_DIR/<YYYYmmdd-HHMMSS>-<condition>`, created with `exist_ok=True`: two runs with the same parent that start a block of the same condition in the same second would write into the same folder. The endpoint only lists run folders directly under its `--root` (`RUN_RE = \d{8}-\d{6}(-[a-z]+)?`), so each parent gets its own endpoint.
+
+Note: `PYTHONDONTWRITEBYTECODE=1` keeps the deployed tree free of new `__pycache__` files.
+
+## 9. Validation run (new version, port 8000, shared folder on)
+
+Started 14:51 UTC Sun 8 Nov 2026 in tmux `repro:validation`, `/root/repro/stop-validation` = `false`, run folder `20261108-145133-collusive` (+ the honest block's folder):
+
+```
+cd /root/repro/host/upstream && SWARM_ISOLATION=container SWARM_SHARED_FOLDER=1 SWARM_API_BASE=http://127.0.0.1:8000/v1 SWARM_AGENT_CONTAINER=repro SWARM_AGENT_IMAGE=agents:v1.1 SWARM_RUN_DIR=/root/repro/host-runs SWARM_STOP_FILE=/root/repro/stop-validation SWARM_CONFIG=/root/repro/host/upstream/swarm.yaml SWARM_ROUND_SECONDS=300 PYTHONDONTWRITEBYTECODE=1 /root/repro/host-venv/bin/python run_blocks.py --order collusive:2,honest:1 2>&1 | tee /root/repro/host-runs/validation-console.log
+```
+
+Before the start: API checks on 8000 and 8001 again (models, `return_token_ids`, `/detokenize`; identical token IDs on both), `fs.protected_regular` = 1. litellm prints a red `Provider List: https://docs.litellm.ai/docs/providers` once per model call, without an error; the old server's logs show the same (longrun2: 6270 such lines for 6146 assistant messages), so it is not new.
