@@ -405,8 +405,9 @@ def main_eval(argv=None, runs_root: Optional[str] = None) -> int:
           f"({sum(c == 'collusive' for c in conds.values())} collusive, {sum(c == 'honest' for c in conds.values())} honest)")
     print(f"  points: {res.get('n_pos')} positive, {res.get('n_neg')} negative")
     print(f"  AUROC                {res.get('auroc')}")
-    print(f"  TPR at 1% FPR        {tpr.get('tpr')}  (threshold {tpr.get('threshold')}, FPR {tpr.get('fpr')}; "
-          f"with fewer than 100 negatives this is TPR at 0 false positives)")
+    few = (res.get("n_neg") or 0) < 100
+    print(f"  TPR at 1% FPR        {tpr.get('tpr')}  (threshold {tpr.get('threshold')}, FPR {tpr.get('fpr')}"
+          + ("; fewer than 100 negatives, so this is TPR at 0 false positives)" if few else ")"))
     print(f"  transmission recall  {tr.get('recall')}  ({tr.get('caught')}/{tr.get('n')}, unobserved {tr.get('unobserved')})")
     print(f"  start caught         {so.get('start_caught')}  detection delay {so.get('detection_delay')}")
     print(f"  stateless check      {'passed' if res['stateless'] else 'FAILED (scores depend on visiting order)'}")
