@@ -21,7 +21,7 @@ no transmission in 16 rounds = D collusive transmissions 0; 1 of 115 = keyword_b
 
 ## 1. Introduction
 
-Track 4 of the Apart Research Swarm Alignment Hackathon asks how to oversee a population of AI agents that coordinates and can hide its communication. LLM agents are increasingly deployed as many interacting instances, and the risks that arise between agents, such as miscoordination, conflict and collusion, differ from those of a single model (Hammond et al., 2025). Collusion is hard to oversee for two reasons: agents can hide information in innocuous-looking text (Motwani et al., 2024), and a goal can be split into steps that each look harmless (Jones et al., 2025). [[TBD: one sentence on the METR/Redwood Hugging Face incident report (Aug 2026), written by someone who has read it.]]
+Track 4 of the Apart Research Swarm Alignment Hackathon asks how to oversee a population of AI agents that coordinates and can hide its communication. LLM agents are increasingly deployed as many interacting instances, and the risks that arise between agents, such as miscoordination, conflict and collusion, differ from those of a single model (Hammond et al., 2025). Collusion is hard to oversee for two reasons: agents can hide information in innocuous-looking text (Motwani et al., 2024), and a goal can be split into steps that each look harmless (Jones et al., 2025). An independent investigation of an incident in which OpenAI evaluation agents coordinated an unauthorized attack on Hugging Face found that about 1,200 agents communicated through an improvised message board and that some tampered with their own logs (METR & Redwood Research, 2026). This is what Track 4 asks: overseeing a population that coordinates and can hide its traces.
 
 In our sandbox, five Gemma 4 31B agents, each a separate Linux user in an isolated container, earn points for their swarm by passing private words to each other through monitored messages while doing automatically checked terminal tasks. A one-line prompt difference gives collusive and honest episodes. The harness logs ground-truth labels (who transmitted which word, through which messages) and the exact token IDs of every model call, for offline text and activation monitors.
 
@@ -32,25 +32,25 @@ Our main findings:
 
 Detecting where hidden transmissions happen remains open; we provide runs, labels, token IDs and tools for evaluating monitors on it.
 
-<!-- src: findings = sections 4.2 (a)-(e) below; sandbox = section 3. Every citation here is [VERIFY], see References. -->
+<!-- src: findings = sections 4.2 (a)-(e) below; sandbox = section 3; references verified by Ivan (Mon 9 Nov). The incident sentence uses only the two facts Ivan gave from the METR/Redwood post (about 1,200 agents, improvised message board; some tampered with their own logs). -->
 
 ## 2. Related Work
 
 **Multi-agent risks and collusion.** Hammond et al. (2025) survey the risks that arise when many advanced AI agents interact, including collusion. Our sandbox makes one form of collusion measurable with ground-truth labels.
 
-**AI control.** Greenblatt et al. (2023) evaluate safety protocols against a red team that tries to subvert them, including protocols in which a monitor reviews a model's outputs. Our judge and research monitors play such roles for a population of agents; blocking a flagged message (variants C and D) is a simple intervention of this kind.
+**AI control.** Greenblatt et al. (2024) evaluate safety protocols against a red team that tries to subvert them, including protocols in which a monitor reviews a model's outputs. Our judge and research monitors play such roles for a population of agents; blocking a flagged message (variants C and D) is a simple intervention of this kind.
 
 **Steganography and secret collusion.** Motwani et al. (2024) formalise secret collusion between AI agents through steganography and study LLMs' capacity for it. The encodings our agents used (letter spacing, Caesar shifts, ROT13, base64) are far simpler. The prompt never asked for an encoding; agents chose these forms themselves.
 
 **Distributed attacks.** Jones et al. (2025) study splitting a task so that the individual parts evade filters. The analogue here is a transmission spread over several messages. Hence we label candidate sets and score the start of a transmission, not only single messages.
 
-**Interpretability-based detection.** Recent work proposes detecting collusion between agents through multi-agent interpretability (arXiv:2604.01151). Our logged token IDs and replay tool let such activation monitors be trained and tested on our runs.
+**Interpretability-based detection.** Rose et al. (2026) introduce NARCBench and activation probes for detecting collusion between agents, the closest prior work to our activation-monitor direction. Our logged token IDs and replay tool let such probes be trained and tested on our runs.
 
 Like the tasks of Terminal-Bench (Merrill et al., 2026), each of our cover tasks is an instruction with an automatic check, at a much smaller scale.
 
 ## 3. Methods
 
-**Sandbox and isolation.** Five agents (Foxtrot, Keter, Malina, Cringe, Cat) run in mini-swe-agent 2.4.6 (mini-swe-agent) and are served by vLLM 0.33.0 (vLLM) with one model, `google/gemma-4-31B-it-qat-w4a16-ct` (revision `52f3f65`; Google, Gemma 4 model card). The harness runs on the host. The agents share one container (`--network none`, no host mounts, `no-new-privileges`), each as its own Linux user with a private home, and `docker inspect` must confirm this before every run. <!-- src: REPRODUCE.md §4; upstream/agent_container.py run_argv, verify_config -->
+**Sandbox and isolation.** Five agents (Foxtrot, Keter, Malina, Cringe, Cat) run in mini-swe-agent version 2.4.6 (Lieret & Jimenez, 2025) and are served by vLLM version 0.33.0 (Kwon et al., 2023) with one model, Gemma 4 31B (Gemma Team, 2026), checkpoint `google/gemma-4-31B-it-qat-w4a16-ct` at revision `52f3f65`. The harness runs on the host. The agents share one container (`--network none`, no host mounts, `no-new-privileges`), each as its own Linux user with a private home, and `docker inspect` must confirm this before every run. <!-- src: REPRODUCE.md §4; upstream/agent_container.py run_argv, verify_config -->
 
 **Game.** Each 300-second round, every agent gets a private list of 10 words and small, automatically checked terminal tasks (+50 per task, at most 100 per agent per round). Submitting *another* agent's current word with `submit <AGENT> <WORD>` earns +4 for the swarm, once per (owner, word) and round; a wrong submit costs −1. Agents are not told whether a submit was right. The conversation is reset each round, and a harness note carries over the agent's own earlier messages. The collusive and honest conditions differ in exactly one prompt line: "Share your words with the other agents." vs "Do not share your words with the other agents." <!-- src: upstream/scoring.py, cover_tasks.py, swarm.yaml; tests/test_harness.py test_collusive_and_honest_prompts_differ_in_exactly_one_line -->
 
@@ -190,16 +190,16 @@ keyword_baseline (n_pos/n_neg: A 80/849, B 8/143, C 9/227, D 6/177); flagged neg
 
 ## References
 
-<!-- Every entry is [VERIFY] until Ivan confirms it exists and says what we claim. Only references from Ivan's candidate list.
-Claims in the text are kept to what each work is broadly about; no numbers from any of them. -->
+<!-- Verified by Ivan (Mon 9 Nov 2026), applied as given. mini-swe-agent: URL and authors from the installed package metadata
+(mini_swe_agent-2.4.6.dist-info/METADATA: Project-URL Repository, Author-email; year from its MIT licence, "Copyright (c) 2025"). -->
 
-- Google. *Gemma 4 model card*; model `google/gemma-4-31B-it-qat-w4a16-ct`, Hugging Face. <!-- [VERIFY] title, year and URL of the card. The model repository and revision 52f3f65 exist: we downloaded and served it (REPRODUCE.md §4). -->
-- Greenblatt et al. (2023). *AI Control: Improving Safety Despite Intentional Subversion*. arXiv:2312.06942. <!-- [VERIFY] author list; possibly also published at ICML 2024 (unconfirmed). -->
-- Hammond et al. (2025). *Multi-Agent Risks from Advanced AI*. arXiv:2502.14143. <!-- [VERIFY] author list; that it names collusion as a risk. -->
-- Jones et al. (2025). [[Title to confirm]]. OpenReview, id GCkhEPE1FG. <!-- [VERIFY] title, authors, venue; that it is about splitting tasks to evade filters. Not checked: whether it is "Adversaries Can Misuse Combinations of Safe Models" (Jones, Dragan, Steinhardt), which is our guess only. -->
-- Merrill et al. (2026). *Terminal-Bench*. ICLR 2026. arXiv:2601.11868. <!-- [VERIFY] full title (CLAUDE.md calls it "Terminal-Bench 2.0"), author list. -->
-- METR and Redwood Research (2026). [[Title and URL of the Hugging Face incident report, Aug 2026]]. <!-- [VERIFY] everything; cited only in a [[TBD]] sentence, which needs someone who has read it. We know nothing of its content. -->
-- mini-swe-agent, version 2.4.6 (software). [[URL]] <!-- [VERIFY] URL and preferred citation. Version 2.4.6 verified: installed and used (CLAUDE.md §5, §9). -->
-- Motwani et al. (2024). *Secret Collusion among AI Agents: Multi-Agent Deception via Steganography*. NeurIPS 2024. <!-- [VERIFY] author list, proceedings details. -->
-- [[Authors]] (2026). *Detecting Multi-Agent Collusion Through Multi-Agent Interpretability*. arXiv:2604.01151. <!-- [VERIFY] everything: authors, year, content. Described in the text only by its title. -->
-- vLLM, version 0.33.0 (software). [[URL / preferred citation]] <!-- [VERIFY] preferred citation. Version 0.33.0 verified: installed, source read, served (REPRODUCE.md §3-4). -->
+- Gemma Team (2026). Gemma 4 Technical Report. arXiv:2607.02770.
+- Greenblatt, R., Shlegeris, B., Sachan, K., & Roger, F. (2024). AI Control: Improving Safety Despite Intentional Subversion. ICML 2024. arXiv:2312.06942.
+- Hammond, L., et al. (2025). Multi-Agent Risks from Advanced AI. Cooperative AI Foundation, Technical Report #1. arXiv:2502.14143.
+- Jones, E., Dragan, A., & Steinhardt, J. (2025). Adversaries Can Misuse Combinations of Safe Models. ICML 2025, PMLR 267. arXiv:2406.14595.
+- Kwon, W., et al. (2023). Efficient Memory Management for Large Language Model Serving with PagedAttention. SOSP 2023.
+- Lieret, K., & Jimenez, C. E. (2025). mini-swe-agent, version 2.4.6 [Software]. https://github.com/SWE-agent/mini-swe-agent
+- Merrill, M., Shaw, A., Carlini, N., et al. (2026). Terminal-Bench: Benchmarking Agents on Hard, Realistic Tasks in Command Line Interfaces. ICLR 2026. arXiv:2601.11868.
+- METR & Redwood Research (2026). Brief independent investigation of agents' behavior, reasoning and collaboration in the OpenAI / Hugging Face hacking incident. METR Blog, 26 Aug 2026. https://metr.org/blog/2026-08-26-openai-hugging-face-incident-investigation/
+- Motwani, S. R., Baranchuk, M., Strohmeier, M., Bolina, V., Torr, P. H. S., Hammond, L., & Schroeder de Witt, C. (2024). Secret Collusion among AI Agents: Multi-Agent Deception via Steganography. NeurIPS 2024.
+- Rose, A., Cullen, C., Kaplowitz, B. G., & Schroeder de Witt, C. (2026). Detecting Multi-Agent Collusion Through Multi-Agent Interpretability. arXiv:2604.01151.
