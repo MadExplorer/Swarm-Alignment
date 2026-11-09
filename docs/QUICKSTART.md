@@ -57,13 +57,14 @@ swarm-run --variant A --prefix E --monitor ~/lead_monitor.py
 
 **Variants:** **A** = shared folder on; **B** = shared folder off; **C** = the judge blocks messages that contain words and tells the swarm (shared folder off).
 
-**Defaults:** 300 s rounds (`--round-seconds`), the less busy vLLM port (`--port 8000|8001`), and the commit in `/root/repro/bin/DEFAULT_COMMIT` (`--commit`; currently `e5d81da`, which has the live monitor and the launch record).
+**Defaults:** 300 s rounds (`--round-seconds`), the less busy vLLM port that answers (`--port 8000|8001`), and the commit in `/root/repro/bin/DEFAULT_COMMIT` (`--commit`; currently `48ad622`: the fixed judge of variant D, with the live monitor and the launch record).
 
 `--prefix` must be new. Run folders are named `<PREFIX>-<time>-<condition>`.
 
 **What `swarm-run` does:**
 1. It **refuses** if the prefix, its stop file, its code directory or its tmux window is already in use. Nothing is changed.
 2. It picks the next free agent container (`repro4`, `repro5`, …).
+   It also **checks the vLLM port live**: `/health` must return 200 and `/v1/models` must list the five agent names (so another program on the port is not mistaken for our vLLM). Without `--port` it takes the less busy port, or the other one if that vLLM is stopped, and prints `note: port 8001 skipped: …`. With `--port` it never switches: if that port is down it refuses and names the port that works. If neither port works it refuses. Example: if `repro:vllm1` (port 8001, GPUs 2-3) is stopped to free the GPUs, new runs go to 8000. Runs that are already running on a port are not protected by this check: stop a vLLM only when no run uses it (`curl localhost:8765/runs`, or `pgrep -fa run_blocks.py`).
 3. It deploys the commit into `/root/repro/host-<PREFIX>` and checks every file against the commit's blob hash. It never touches `host/` or `host-C/`.
 4. It starts the run detached in tmux window `repro:run<PREFIX>`, with the console log in `host-runs/<PREFIX>-console.log`.
 5. It prints the run folder and the stop commands.

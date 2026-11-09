@@ -57,8 +57,8 @@ class FakeHost(swarmctl.Host):
     def tmux_windows(self):
         return set(self._windows)
 
-    def vllm_ok(self, port):
-        return port in self._healthy
+    def vllm_problem(self, port):
+        return None if port in self._healthy else "nothing answers on /health (Connection refused)"
 
     def run(self, argv, **kw):
         self.calls.append(argv)
@@ -154,7 +154,8 @@ def test_unhealthy_vllm_and_bad_order_are_refused(tmp_path, capsys):
     root, _ = make_repo(tmp_path, MAIN_NEW)
     assert swarmctl.main_run(["--variant", "B", "--prefix", "D", "--port", "8001"],
                              host=FakeHost(root, healthy=(8000,))) == 2
-    assert "not healthy" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "port 8001 is not usable" in err and "--port 8000" in err
     assert swarmctl.main_run(["--variant", "B", "--prefix", "D", "--order", "collusive"], host=FakeHost(root)) == 2
 
 
@@ -321,3 +322,77 @@ def test_default_commit_file_wins_over_cs_commit(tmp_path, capsys):
     assert swarmctl.main_run(["--variant", "B", "--prefix", "D", "--order", "honest:1", "--dry-run"],
                              host=FakeHost(root)) == 0
     assert f"SWARM_DEPLOYED_COMMIT={sha}" in capsys.readouterr().out
+
+
+# ---- the vLLM port is checked live before a launch ---------------------------------------------------------
+def test_auto_port_falls_back_when_the_less_busy_vllm_is_down(tmp_path, capsys):
+    root, _ = make_repo(tmp_path, MAIN_NEW)
+    on_8000 = [proc(10, "run_blocks", "A", 8000, "repro")]                  # 8001 is less busy ...
+    h = FakeHost(root, DOCKER, on_8000, healthy=(8000,))                    # ... but its vLLM is stopped
+    rc = swarmctl.main_run(["--variant", "C", "--prefix", "E", "--order", "honest:1", "--dry-run"], host=h)
+    out = capsys.readouterr().out
+    assert rc == 0 and "note: port 8001 skipped" in out and "using port 8000" in out
+    assert "127.0.0.1:8000/v1" in out and "127.0.0.1:8001" not in out.split("command:")[1]
+    assert '"ports_skipped":["port 8001 skipped' in out                   # recorded in the launch record
+
+
+def test_explicit_port_down_is_refused_never_switched(tmp_path, capsys):
+    root, _ = make_repo(tmp_path, MAIN_NEW)
+    before = sorted(p.name for p in root.iterdir())
+    h = FakeHost(root, DOCKER, healthy=(8000,))
+    assert swarmctl.main_run(["--variant", "C", "--prefix", "E", "--port", "8001"], host=h) == 2
+    err = capsys.readouterr().err
+    assert "vLLM on port 8001 is not usable" in err and "rerun with --port 8000" in err
+    assert sorted(p.name for p in root.iterdir()) == before and h.calls == []
+
+
+def test_no_vllm_at_all_is_refused(tmp_path, capsys):
+    root, _ = make_repo(tmp_path, MAIN_NEW)
+    h = FakeHost(root, DOCKER, healthy=())
+    assert swarmctl.main_run(["--variant", "B", "--prefix", "E"], host=h) == 2
+    err = capsys.readouterr().err
+    assert "no usable vLLM on any port" in err and "port 8000 skipped" in err and "port 8001 skipped" in err
+    h2 = FakeHost(root, DOCKER, healthy=())
+    assert swarmctl.main_run(["--variant", "B", "--prefix", "E", "--port", "8000"], host=h2) == 2
+    assert "no other vLLM port is usable either" in capsys.readouterr().err
+
+
+def _serve(handler_body):
+    """A tiny HTTP server on a free 127.0.0.1 port; handler_body(path) -> (status, json-able body)."""
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            status, body = handler_body(self.path)
+            data = json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_real_host_check_needs_health_and_the_agent_model_names(tmp_path):
+    host = swarmctl.Host(str(tmp_path))
+    models = {"data": [{"id": n} for n in swarmctl.AGENT_NAMES]}
+    ours = _serve(lambda path: (200, {}) if path == "/health" else (200, models))
+    other = _serve(lambda path: (200, {}) if path == "/health" else (200, {"data": [{"id": "lead-monitor"}]}))
+    sick = _serve(lambda path: (503, {}))
+    try:
+        assert host.vllm_problem(ours.server_address[1]) is None
+        assert "does not serve the agents' model names" in host.vllm_problem(other.server_address[1])
+        assert "HTTP 503" in host.vllm_problem(sick.server_address[1])
+        port = sick.server_address[1]
+    finally:
+        for s in (ours, other, sick):
+            s.shutdown()
+            s.server_close()
+    assert "nothing answers" in host.vllm_problem(port)                     # closed now

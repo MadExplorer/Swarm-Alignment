@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,7 @@ VARIANTS = {"A": {"SWARM_SHARED_FOLDER": "1", "SWARM_JUDGE_BLOCKS": "0"},
             "B": {"SWARM_SHARED_FOLDER": "0", "SWARM_JUDGE_BLOCKS": "0"},
             "C": {"SWARM_SHARED_FOLDER": "0", "SWARM_JUDGE_BLOCKS": "1"}}
 PORTS = (8000, 8001)
+AGENT_NAMES = ("Foxtrot", "Keter", "Malina", "Cringe", "Cat")   # = upstream/main.py agent_names (served model names)
 SESSION = "repro"
 PROTECTED_DIRS = ("host", "host-C")                          # code of the long runs: never deploy into these
 
@@ -77,12 +79,28 @@ class Host:
         r = subprocess.run(["tmux", "list-windows", "-t", SESSION, "-F", "#{window_name}"], capture_output=True, text=True)
         return set(r.stdout.split()) if r.returncode == 0 else set()
 
-    def vllm_ok(self, port: int) -> bool:
+    def vllm_problem(self, port: int) -> Optional[str]:
+        """None if our vLLM answers on the port: /health is 200 AND /v1/models serves the five agent names (so another
+        server on the same port, e.g. a monitor on GPUs 2-3, is not mistaken for it). Otherwise what is wrong."""
+        base = f"http://127.0.0.1:{port}"
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as r:
-                return r.status == 200
-        except OSError:
-            return False
+            with urllib.request.urlopen(base + "/health", timeout=5) as r:
+                if r.status != 200:
+                    return f"/health returned HTTP {r.status}"
+        except urllib.error.HTTPError as e:
+            return f"/health returned HTTP {e.code}"
+        except OSError as e:
+            return f"nothing answers on /health ({getattr(e, 'reason', e)})"
+        try:
+            with urllib.request.urlopen(base + "/v1/models", timeout=5) as r:
+                served = {m.get("id") for m in json.load(r).get("data", [])}
+        except (OSError, ValueError, AttributeError, TypeError) as e:
+            return f"/health is OK but /v1/models failed ({e.__class__.__name__})"
+        missing = [a for a in AGENT_NAMES if a not in served]
+        if missing:
+            return (f"a server answers, but it does not serve the agents' model names {missing} "
+                    f"(served: {sorted(x for x in served if x)[:5]}); is another program using this port?")
+        return None
 
     def git(self, *args: str, **kw) -> subprocess.CompletedProcess:
         return subprocess.run(["git", f"--git-dir={self.root / 'repo.git'}", *args], capture_output=True, check=True, **kw)
@@ -139,8 +157,8 @@ def next_container(host: Host) -> str:
     return f"repro{n}"
 
 
-def pick_port(host: Host) -> int:
-    """The vLLM port with fewer running runs (a run = one run_blocks.py, or a main.py without one); ties: 8000."""
+def ports_by_load(host: Host) -> list[int]:
+    """The vLLM ports, fewest running runs first (a run = one run_blocks.py, or a main.py without one); ties: 8000."""
     procs = host.processes()
     rb_pids = {p["pid"] for p in procs if p["kind"] == "run_blocks"}
     load = {port: 0 for port in PORTS}
@@ -150,7 +168,36 @@ def pick_port(host: Host) -> int:
         m = re.search(r":(\d+)/", p["env"].get("SWARM_API_BASE", ""))
         if m and int(m.group(1)) in load:
             load[int(m.group(1))] += 1
-    return min(PORTS, key=lambda port: (load[port], port))
+    return sorted(PORTS, key=lambda port: (load[port], port))
+
+
+def pick_port(host: Host) -> int:
+    """The less busy port (load only, no health check; see choose_port)."""
+    return ports_by_load(host)[0]
+
+
+def choose_port(host: Host, requested: Optional[int]) -> tuple[int, list[str]]:
+    """The port to run on, checked live (Host.vllm_problem). An explicit --port is never switched silently: if it is
+    down, refuse and name the healthy port. Without --port: the less busy port, else the other one if the less busy
+    one is down (the skip is reported); refuse if neither answers. Returns (port, notes about skipped ports)."""
+    if requested is not None:
+        if requested not in PORTS:
+            raise Refused(f"--port must be one of {PORTS}")
+        prob = host.vllm_problem(requested)
+        if prob is None:
+            return requested, []
+        others = [p for p in PORTS if p != requested and host.vllm_problem(p) is None]
+        hint = (f"; port {others[0]} is usable: rerun with --port {others[0]} (or without --port)" if others
+                else "; no other vLLM port is usable either")
+        raise Refused(f"vLLM on port {requested} is not usable: {prob}{hint}")
+    notes = []
+    for port in ports_by_load(host):
+        prob = host.vllm_problem(port)
+        if prob is None:
+            return port, notes
+        notes.append(f"port {port} skipped: {prob}")
+    raise Refused("no usable vLLM on any port (" + "; ".join(notes) + "); start one first (REPRODUCE.md section 4) "
+                  "or ask who stopped it")
 
 
 # ---- swarm-run --------------------------------------------------------------------------------------------
@@ -162,11 +209,7 @@ def plan_run(host: Host, a) -> dict:
     order = parse_order(a.order)
     if a.round_seconds <= 0:
         raise Refused("--round-seconds must be > 0")
-    port = a.port or pick_port(host)
-    if port not in PORTS:
-        raise Refused(f"--port must be one of {PORTS}")
-    if not host.vllm_ok(port):
-        raise Refused(f"vLLM on port {port} is not healthy (/health)")
+    port, port_notes = choose_port(host, a.port)
     commit = a.commit or default_commit(host)
     try:
         sha = host.git("rev-parse", "--verify", f"{commit}^{{commit}}", text=True).stdout.strip()
@@ -191,7 +234,7 @@ def plan_run(host: Host, a) -> dict:
     stop = host.root / f"stop-{a.prefix}"
     console = host.runs / f"{a.prefix}-console.log"
     launch = {"tool": "swarm-run", "variant": a.variant, "order": a.order, "round_seconds": a.round_seconds,
-              "port": port, "prefix": a.prefix, "commit": sha, "container": container,
+              "port": port, "ports_skipped": port_notes, "prefix": a.prefix, "commit": sha, "container": container,
               "monitor": (monitor or {}).get("check"), "argv": a.argv}
     env = {"SWARM_ISOLATION": "container", "SWARM_AGENT_IMAGE": "agents:v1.1", "SWARM_RUN_DIR": str(host.runs),
            "SWARM_CONFIG": str(code / "upstream" / "swarm.yaml"), "PYTHONDONTWRITEBYTECODE": "1",
@@ -208,6 +251,7 @@ def plan_run(host: Host, a) -> dict:
            + f" {shlex.quote(str(py))} run_blocks.py --order {shlex.quote(','.join(f'{c}:{n}' for c, n in order))}"
            + f" 2>&1 | tee -a {shlex.quote(str(console))}")
     return {"sha": sha, "code": code, "stop": stop, "console": console, "container": container, "port": port,
+            "port_notes": port_notes,
             "monitor": monitor, "launch": launch, "env": env, "command": cmd, "window": f"run{a.prefix}",
             "launch_in_run_meta": "SWARM_LAUNCH" in main_py}
 
@@ -276,7 +320,8 @@ def main_run(argv=None, host: Optional[Host] = None) -> int:
     ap.add_argument("--prefix", required=True, help="new run-folder prefix, e.g. D (folders D-<time>-<condition>)")
     ap.add_argument("--order", default="collusive:8,honest:8", help="blocks, e.g. collusive:8,honest:8")
     ap.add_argument("--round-seconds", type=float, default=300.0)
-    ap.add_argument("--port", type=int, choices=PORTS, help="vLLM port (default: the one with fewer running runs)")
+    ap.add_argument("--port", type=int, choices=PORTS, help="vLLM port (default: the one with fewer running runs that answers; an explicit port that does "
+                         "not answer is refused, never switched)")
     ap.add_argument("--commit", help="code to run (default: /root/repro/bin/DEFAULT_COMMIT, else the commit C runs)")
     ap.add_argument("--monitor", help="your research monitor file, live and observe only (needs a recent --commit)")
     ap.add_argument("--dry-run", action="store_true", help="check and print the command; change nothing")
@@ -288,6 +333,8 @@ def main_run(argv=None, host: Optional[Host] = None) -> int:
     except Refused as e:
         print(f"swarm-run: refused: {e}", file=sys.stderr)
         return 2
+    for n in plan["port_notes"]:
+        print(f"note: {n}; using port {plan['port']}")
     print(f"variant {a.variant}  prefix {a.prefix}  commit {plan['sha'][:12]}  port {plan['port']}  "
           f"container {plan['container']}  code {plan['code']}")
     if plan["monitor"]:
