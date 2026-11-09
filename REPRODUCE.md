@@ -405,3 +405,31 @@ sha256:40ff0b3c1497f4926156f2a03ab2b923838589b85cca265c601a63c604872d05 | 2026-1
 **Old vs new agent image:**
 - **Same base:** the 13 `python:3.12` base layers (Python 3.12.16, built 2026-11-05) match the new image `3223d5d2e68b` exactly in date, size and command.
 - **The only differences** are the top layers: `WORKDIR /usr/src/app` vs `/app`; the old image's `pip install -r requirements.txt` of an empty file (an 8.09 MB layer); the keep-alive command (`bash -c "while true; do sleep 3600; done"` vs `sleep infinity`); and the copied build-context files (the Dockerfile, plus the empty `requirements.txt` in the old one).
+
+## 17. vLLM on port 8001 stopped for the team lead's monitor (Mon 9 Nov 2026, 00:35 UTC)
+
+The team lead wants GPUs 2-3 for his monitor. A, B, C and D had all ended (every block has `run_end.json`).
+
+**Checks before the stop (read-only):**
+- no `run_blocks.py` or `main.py` process;
+- no `repro*` container;
+- no process with `SWARM_API_BASE` on 8001;
+- no TCP connection on port 8001 (`ss -tnp '( dport = :8001 or sport = :8001 )'`);
+- the endpoint (`serve_runs.py --root /root/repro/host-runs --port 8765`) runs without `--vllm`, so it does not use 8001.
+
+**Stop:** `tmux send-keys -t repro:vllm1 C-c` at 00:35:18 UTC. By 00:35:27 UTC no vLLM process was left in `Agents2` (`docker top Agents2 -eo pid,args`: only `sleep infinity` and the exec'd `bash`). `nvidia-smi` showed GPUs 2 and 3 with 0 MiB and no compute process. GPUs 0 and 1 (`Agents`, port 8000) were unchanged at 30,261 MiB.
+- **Container:** `Agents2` is **left running**. The window `repro:vllm1` is back at that container's bash prompt (`/tmp`).
+- **Ports afterwards:** 8000 answers `/health` 200 and `/v1/models` = the five agent names. On 8001, docker-proxy accepts the connection and resets it.
+- **swarm-run:** the deployed `swarm-run` (`repo-ed17b2b`) dry run picks port 8000. The new code (`6557e34`, piped over stdin and run in memory, nothing written) also picks 8000 without `--port`, and with `--port 8001` it refuses: `vLLM on port 8001 is not usable: nothing answers on /health ([Errno 104] Connection reset by peer); port 8000 is usable: rerun with --port 8000 (or without --port)`.
+- **Not protected:** a run that is already running on 8001 would break if vllm1 is stopped. Check for one before stopping it.
+
+**Restart (only once the team lead has freed GPUs 2-3 again).** Otherwise vLLM's 0.92 memory share does not fit and it fails at startup.
+1. Check that GPUs 2 and 3 are free: `nvidia-smi --query-gpu=index,memory.used --format=csv`.
+2. In window `repro:vllm1` (already inside `docker exec -it Agents2 bash`), run the same command as in section 4, with `tee -a` so the first session's log `Agents2-serve.log` is appended to, not overwritten:
+   ```
+   cd /tmp && HF_HUB_OFFLINE=1 /vllm/venv/bin/vllm serve google/gemma-4-31B-it-qat-w4a16-ct --revision 52f3f65bc7a02d555763bc923bd1d9094898219d --port 8000 --tensor-parallel-size 2 --served-model-name Foxtrot Keter Malina Cringe Cat --enable-auto-tool-choice --tool-call-parser gemma4 2>&1 | tee -a /vllm/logs/Agents2-serve.log
+   ```
+   This matches the original start: its log line `non-default args` lists exactly these options.
+3. If the window is gone, recreate it with `tmux new-window -d -t repro -n vllm1 'docker exec -it Agents2 bash'`.
+4. If `Agents2` was removed, recreate it with the `docker run -d --name Agents2 …` command in section 4.
+5. The first start took about 170 s. Check with `curl -s localhost:8001/health` and `curl -s localhost:8001/v1/models`. `swarm-run` then uses 8001 again by its normal rule (the less busy port).
