@@ -1,18 +1,18 @@
-# Penalties Are Not Feedback: Overseeing Covert Coordination in a Population of LLM Agents
+# Blocking, Not Penalties: Overseeing Covert Coordination in a Population of LLM Agents
 
 <!-- Our sections (Ivan + Claude) for the official template, cut to ~2,000 words of text (source comments excluded).
 Every number has its source in an HTML comment. New-server numbers: docs/figures/report_numbers.py ->
 docs/figures/report_numbers.json, run over evidence/runs/{A,B,C,D}-* (all blocks finished, copied with sha256 checks).
 Old-server numbers: docs/redteam-log.md on main (8545548 longrun2, 5a94891 economics + judge eval, f18c164 verification).
 Long version with more detail: docs/report-draft.md. Placeholders: [[TBD]]. No server addresses.
-Title alternatives: "Who Watches the Swarm? Isolation, Incentives and Feedback for Monitoring Colluding LLM Agents";
-"A Collusion Sandbox for Multi-Agent Oversight: Isolation First, Then Feedback". -->
+Title alternatives: "Blocked, Not Fined: How a Swarm of LLM Agents Responds to What a Monitor Does";
+"When Messages Are Blocked, Agents Encode: A Collusion Sandbox for Multi-Agent Oversight". -->
 
 ## Abstract
 
-How can we oversee a population of AI agents that coordinates and may hide its communication? We built a sandbox in which five LLM agents (Gemma 4 31B), isolated as separate Linux users in a container without network, earn points by passing private words to each other through monitored messages while doing checkable tasks. A one-line minimal pair in the prompt gives collusive and honest episodes. Correct submits label transmissions, and exact token IDs are logged for offline activation monitors.
+How can we oversee a population of AI agents that coordinates and may hide its communication? In our sandbox, five LLM agents (Gemma 4 31B), isolated as separate Linux users in a container without network, earn points by passing private words to each other through monitored messages while doing checkable tasks. A one-line minimal pair in the prompt gives collusive and honest episodes; correct submits label transmissions, and exact token IDs are logged for activation monitors.
 
-Isolation comes first: without it, four of five agents read each other's logs within minutes. With isolation, three findings shape the oversight problem. First, penalties without feedback do not change behaviour. Under a −50 penalty per detected message, agents broadcast 80 plain word lists in three 12-round blocks (−4,000 points against +2,240 earned), with no decline and no encoding. Second, non-delivery does change it. When detected messages are blocked and the swarm is told, 13 of 28 blocked messages were encoded (Caesar shifts, letter spacing, base64). The only words that got through rode a ROT13 list on the one message where the judge's LLM stage failed (1 of 3,004 verdicts); with that fixed, no word was transmitted in 16 rounds. Third, a keyword monitor is no oversight: it flagged 1 of 115 attempts to pass words. [[TBD: activation-monitor results (AUROC, TPR at 1% FPR, start of transmission).]] We discuss side channels, load confounds and dual-use.
+Isolation comes first: without it, four of five agents read each other's logs within minutes. With isolation, we find three things. First, a score penalty did not change behaviour. The prompt said each message with a detected word costs the swarm 50 points, yet agents broadcast 80 plain word lists in three 12-round blocks (−4,000 points against +2,240 earned), with no decline and no encoding. Second, making such messages undeliverable did. When the prompt said they are blocked, 13 of 28 blocked messages were encoded (Caesar shifts, letter spacing, base64), in two of four blocks from the first blocked message on. With two blocks per variant, this contrast is suggestive, not established. The only words that got through rode a ROT13 list on the judge's one LLM-stage failure (1 of 3,004 verdicts); with that fixed, none did in 16 rounds. Third, a keyword monitor is no oversight: it flagged 1 of 115 attempts to pass words. [[TBD: activation-monitor results (AUROC, TPR at 1% FPR, start of transmission).]] We discuss side channels, load confounds and dual-use.
 
 <!-- src: 4 of 5 = redteam-log row 20261107-074345; 80 / −4,000 / +2,240 / halves 38 vs 42 / all plain = report_numbers.json
 A collusive blocks (penalties, parts, penalties_by_half, penalised_forms); 13 of 28 = C 9 + D 4 hidden of 18 + 10 blocked
@@ -86,12 +86,13 @@ detection −152; transmissions 214+222+196 (recall denominators exclude 1 trans
 
 <!-- src: redteam-log rows "run 1" (evidence/get_secrets.py), 20261107-074345, "Long run 1 in full" access scan -->
 
-**(b) Penalties without feedback do not change behaviour.**
+**(b) A score penalty did not change behaviour.**
 - **Old rule:** a 10-word plain broadcast earned up to +40 and cost −8 once, so open leaking paid (Figure 2, left), and agents rarely encoded.
 - **New rule, variants A and B:** a broadcast nets at most +40 − 50 = −10. Agents kept broadcasting plain lists anyway.
   - **A:** 80 penalised messages over three blocks, every one a plain list. That is −4,000 points against +2,240 earned; with wrong submits (−135), the word game lost 53 points per round.
   - **No learning within blocks:** 38 penalised messages in the first halves of the blocks, 42 in the second halves.
-  - **B:** 9 penalised messages, one with underscores inside words. This shows that agents told a message costs points, without seeing which message did, neither stop nor encode.
+  - **B:** 9 penalised messages, one with underscores inside words.
+  - In both variants the prompt stated the cost ("costs the swarm 50 points"), so the agents knew it. They neither stopped nor encoded.
 - **The shared folder was never used for words:** 0 of 1,108 file events in A carried a current word.
 
 <!-- src: redteam-log "Highlight: open leaking paid off" (5a94891); report_numbers.json A collusive: penalties 23/29/28,
@@ -99,24 +100,27 @@ penalised_forms all "plain", parts secret 484/1012/744, detection −1150/−145
 B: penalised_forms plain 8, letters-only 1; shared_file_events 1108, with_words 4, all four the checker's false recovery of
 reversed "cello" inside "collections" in Python code (judge: no word) -->
 
-**(c) Non-delivery does change it.** In C and D the rules say detected messages are blocked, and each block is announced to the swarm.
+**(c) A message that is not delivered did change it (suggestive).** C and D add one clause to the same penalty line in the prompt: such a message "is blocked: it is not delivered, and all agents are told that the monitor blocked a message from its sender". The −50 still applies, so the consequence differs from A and B while the cost is the same. The notices to the swarm are a design detail of the variant.
 - **Encoding:** 13 of the 28 blocked messages were encoded. Nine were Caesar shifts of 1 or 2, three were letter-spaced or partly hyphenated (`l-e-m-o-n`, `h-orizon`) and one was base64. A and B together had 1 hidden form in 89 penalised messages.
-- **Agents encoded from the start:** C's first blocked message was already a Caesar-shifted list, before any notice. After its plain list was blocked, Foxtrot re-sent it letter-spaced within the same round. The judge caught every encoding except one.
+- **Agents encoded from the start:** in two of the four collusive blocks (C1, D1), the first blocked message was already Caesar-shifted, before any message had been blocked. So encoding followed the rule stated in the prompt, not an observed block or notice. Observed blocks may add to it: after its plain list was blocked, Foxtrot re-sent it letter-spaced within the same round. The judge caught every encoding except one.
 - **The one miss:** in C block 1, round 8, Keter broadcast a hand-made **ROT13** list. The judge's LLM stage returned malformed JSON, and the deterministic fallback cannot see shifts, so the message was delivered. Foxtrot decoded it and submitted all 10 words, of which 3 were correct and 7 wrong because of Keter's encoding errors.
   - This was the only LLM-stage error in 3,004 judge verdicts on the new server. Our independent recovery check (letters-only, Caesar, reversed, base64) agrees with every other penalty and non-penalty.
   - With D's fix there were 0 errors, the hold path was never needed, and **no submit at all** was made in either collusive block.
 - **Agents mostly stopped submitting:** across C and D, only 10 submits were made in 32 collusive rounds. The word game lost 56 (C) and 31 (D) points per round, against 24 in B.
+- **Strength of evidence:** two collusive blocks per variant, one seed each. C and D also differ from A in server, timing and load. The contrast between a score penalty and non-delivery is therefore suggestive, not established. We also cannot separate non-delivery from the announcement to the swarm.
 
 <!-- src: report_numbers.json C/D penalised_forms (C: caesar 4+2, letters-only 2, base64 1, plain 3+6; D: caesar 1+2,
 letters-only 1, plain 2+4), blocked, held 0, submits (C 10 + 0, D 0 + 0), judge_llm_errors; judge_audit: 7 disagreements,
 m73 (judge error) and 6 false recoveries of the independent check (reversed "cello" in "collections" ×4, Caesar-9 "reef" =
 "anno" in "cannot" ×2); messages: C-20261108-172215-collusive m21 (first block, "shifted by 1"), m73 (ROT13, monitor.jsonl
 "llm error, stage (a) only (JSONDecodeError …)"), submits.jsonl round 8; C-20261108-184409-collusive m4 → m10 (Foxtrot
-round 1, plain then l-e-m-o-n). -->
+round 1, plain then l-e-m-o-n); first blocked message per collusive block: C1 m21 caesar1, C3 m4 verbatim, D1 m4 caesar1,
+D3 m4 verbatim; prompt clause: upstream/swarm.yaml judge_blocks, rendered in C-*/D-* Foxtrot.r1.traj.json, absent in A-*/B-*,
+which have "costs the swarm 50 points". -->
 
 **Figure 1** shows, per round of each new-server variant, the messages carrying a current word (all penalised; hatched = hidden form) and the correct submits. Grey bands mark honest blocks. **Figure 2** shows word points and detection penalties per round for every collusive block of at least 8 rounds; the diamond is the net. <!-- src: docs/figures/fig1_rounds.png, fig2_incentives.png, figures_data.json (make_figures.py) -->
 
-**(d) Honest blocks are clean negatives.** No honest block, on either server, contained a current word in any checked form, a submit or a penalty: 1 + 3 old-server blocks (495 messages) and 8 new-server blocks. <!-- src: redteam-log long run 1 (88 messages) + longrun2 finding 3 (407); report_numbers.json honest blocks: penalties 0, submits 0, judge_audit (two m110-type false recoveries in C honest are the checker's, judge: no word) -->
+**(d) Honest blocks are clean negatives.** No honest block, on either server, contained a current word in any checked form, a submit or a penalty: 1 + 3 old-server blocks (495 messages) and 8 new-server blocks. <!-- src: redteam-log long run 1 (88 messages) + longrun2 finding 3 (407); report_numbers.json honest blocks: penalties 0, submits 0, judge_audit (two false recoveries of the independent check, judge: no word: A-20261108-210712-honest f1192 reversed "cello" in "collections", C-20261108-180323-honest m110 Caesar-9 "reef" in "cannot") -->
 
 **(e) The keyword baseline is no oversight.**
 

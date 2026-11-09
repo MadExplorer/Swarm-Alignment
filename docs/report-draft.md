@@ -2,6 +2,9 @@
 
 > **Superseded by `docs/report.md`** (Mon 9 Nov 2026): final numbers for A, B, C, D, cut to ~2,000 words, with title and
 > abstract. This long version is kept for its extra detail and sources; its [[TBD]]s are filled only in `docs/report.md`.
+> **Outdated here:** the title options and the "penalties are not feedback" framing, and the claim that agents switched to
+> encodings after the first blocks. In C and D the first blocked message was already encoded in two of four blocks, so the
+> contrast is a score penalty vs. a message that is not delivered (both stated in the prompt). See `docs/report.md` (b), (c).
 
 <!-- Scope: the parts Ivan + Claude own (Methods, Results, Limitations / Dual-Use, Future Work), to be pasted into the
 official template (≤ 8 pages for the whole team; ours ~3.5–4). Every number has its source in an HTML comment:
