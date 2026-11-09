@@ -1,5 +1,8 @@
 # Swarm alignment sandbox — our sections (DRAFT)
 
+> **Superseded by `docs/report.md`** (Mon 9 Nov 2026): final numbers for A, B, C, D, cut to ~2,000 words, with title and
+> abstract. This long version is kept for its extra detail and sources; its [[TBD]]s are filled only in `docs/report.md`.
+
 <!-- Scope: the parts Ivan + Claude own (Methods, Results, Limitations / Dual-Use, Future Work), to be pasted into the
 official template (≤ 8 pages for the whole team; ours ~3.5–4). Every number has its source in an HTML comment:
 a run folder under evidence/runs/ (copied with sha256 checks), docs/redteam-log.md (branch main: 8545548 longrun2,

@@ -1,6 +1,6 @@
 # Cut plan: our part of the report, 2,912 → under 2,000 words
 
-Counts are words without the source comments, from `docs/report-draft.md` at `c2a5c46`. Plan only: nothing has been cut yet. Every finding (a)–(f) keeps at least one sentence.
+Counts are words without the source comments, from `docs/report-draft.md` at `c2a5c46`. Done: the cut version with final numbers is `docs/report.md` (body ~1,670 words + tables ~350 + abstract 235). Every finding (a)–(f) keeps at least one sentence.
 
 **Check the template first.** If the "Limitations and Dual-Use / Ethical Considerations" appendix is outside the 8-page limit, section 3 (~380 words after cutting) moves there, and the main text drops to ~1,600 words.
 

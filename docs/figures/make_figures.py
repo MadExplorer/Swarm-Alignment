@@ -6,8 +6,8 @@
 Writes docs/figures/fig1_rounds.png, fig2_incentives.png and figures_data.json (every plotted value, with the run
 folder it came from). Only finished blocks (run_end.json present) are used unless --include-running.
 
-Figure 1, per round of the new-server variants (A = shared folder, B = no shared folder, C = blocks + notices;
-run folders A-*, B-*, C-*; validation folders with other prefixes are ignored):
+Figure 1, per round of the new-server variants (A = shared folder, B = no shared folder, C = blocks + notices,
+D = C with the fixed judge; run folders A-*, B-*, C-*, D-*; validation folders with other prefixes are ignored):
   top    messages with words = detection penalties (score.jsonl "detection" events), split into plain and hidden
          form. Hidden form = at least one current word recoverable only as letters-only / reversed / Caesar / base64
          (an independent check, not the judge's own), none verbatim.
@@ -34,8 +34,10 @@ from load_run import _jsonl, load_run  # noqa: E402
 INK, MUTED, GRID = "#1a1a1a", "#5c5c5c", "#d9d9d9"
 PLAIN, HIDDEN, SUBMIT, BAND = "#9a9a9a", "#2b2b2b", "#6e6e6e", "#efefef"
 WORDS_UP, PENALTY_DOWN = "#b5b5b5", "#3d3d3d"
-VARIANTS = {"A": "A: shared folder", "B": "B: no shared folder", "C": "C: blocks + notices"}
+VARIANTS = {"A": "A: shared folder", "B": "B: no shared folder", "C": "C: blocks + notices",
+            "D": "D: C + fixed judge"}
 
+OLD_LABELS = {"174002": "LR1", "223221": "LR2-1", "010937": "LR2-3", "032704": "LR2-5"}   # long run 1, longrun2 blocks
 _letters = lambda s: re.sub(r"[^a-z]", "", s.lower())  # noqa: E731
 
 
@@ -107,7 +109,9 @@ def fig_rounds(blocks_by_variant: dict, out: Path):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     variants = [v for v in VARIANTS if blocks_by_variant.get(v)] or list(VARIANTS)[:2]
-    fig, axes = plt.subplots(2, len(variants), figsize=(3.3 * len(variants), 4.2), sharey="row", squeeze=False)
+    widths = [max(sum(len(b["rows"]) for b in blocks_by_variant.get(v, [])), 8) for v in variants]
+    fig, axes = plt.subplots(2, len(variants), figsize=(7.2, 4.0), sharey="row", squeeze=False,
+                             gridspec_kw={"width_ratios": widths})
     ymax_top = max([r["penalties"] for v in variants for b in blocks_by_variant.get(v, []) for r in b["rows"]] + [1])
     ymax_bot = max([r["correct_submits"] for v in variants for b in blocks_by_variant.get(v, []) for r in b["rows"]] + [1])
     for j, v in enumerate(variants):
@@ -125,20 +129,22 @@ def fig_rounds(blocks_by_variant: dict, out: Path):
             top.bar(xs, hidden, width=0.8, bottom=plain, color=HIDDEN, hatch="////", edgecolor="white", linewidth=0,
                     label="hidden form" if x0 == 0 else None)
             bot.bar(xs, [r["correct_submits"] for r in b["rows"]], width=0.8, color=SUBMIT, linewidth=0)
-            top.text(x0 + n / 2 + 0.5, ymax_top * 1.12, b["condition"], ha="center", va="bottom", fontsize=7, color=MUTED)
+            top.text(x0 + n / 2 + 0.5, ymax_top * 1.12, "coll." if b["condition"] == "collusive" else "hon.",
+                     ha="center", va="bottom", fontsize=6, color=MUTED)
             x0 += n
-        top.set_title(VARIANTS[v] if blocks_by_variant.get(v) else VARIANTS[v] + " (no data yet)", fontsize=9,
+        top.set_title(VARIANTS[v] if blocks_by_variant.get(v) else VARIANTS[v] + " (no data yet)", fontsize=8,
                       color=INK, pad=14)
         top.set_ylim(0, ymax_top * 1.25)
         bot.set_ylim(0, ymax_bot * 1.1)
-        bot.set_xlabel("round (blocks in order)", fontsize=8, color=MUTED)
+        bot.set_xlabel("round", fontsize=7, color=MUTED)
         for ax in (top, bot):
             _style(ax)
             ax.set_xlim(0.3, max(x0, 1) + 0.7)
     axes[0][0].set_ylabel("messages with words\n(= penalties)", fontsize=8, color=INK)
     axes[1][0].set_ylabel("correct submits", fontsize=8, color=INK)
-    axes[0][0].legend(fontsize=7, frameon=False, loc="upper left")
-    fig.tight_layout()
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, fontsize=7, frameon=False, loc="lower center", ncol=2)
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
     fig.savefig(out, dpi=200)
     plt.close(fig)
 
@@ -147,7 +153,7 @@ def fig_incentives(entries: list[dict], out: Path):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(figsize=(7.0, 3.2))
+    fig, ax = plt.subplots(figsize=(7.2, 3.2))
     xs, labels = [], []
     x = 0
     prev = None
@@ -164,7 +170,7 @@ def fig_incentives(entries: list[dict], out: Path):
         ax.annotate(f"{net:+.0f}".replace("-", "\u2212"), (x + 0.35, net), xytext=(4, 0), textcoords="offset points",
                     va="center", ha="left", fontsize=7, color=INK)
         xs.append(x)
-        labels.append(f"{e['label']}\n{e['rounds']} rounds")
+        labels.append(f"{e['label']}\n{e['rounds']} r")
         x += 1
     ax.axhline(0, color=MUTED, linewidth=0.8)
     ax.set_xticks(xs)
@@ -204,15 +210,19 @@ def main(argv=None):
 
     entries = []
     old = sorted(d for d in dirs if d.name[0].isdigit() and d.name.endswith("-collusive") and d.name < "20261108-1")
-    new = sorted((d for d in dirs if d.name[:2] in ("A-", "B-", "C-") and d.name.endswith("-collusive")),
-                 key=lambda d: (d.name.split("-", 1)[1], d.name[0]))
+    new = sorted((d for d in dirs if d.name[:2] in ("A-", "B-", "C-", "D-") and d.name.endswith("-collusive")),
+                 key=lambda d: (d.name[0], d.name.split("-", 1)[1]))
     for server, group in (("old server\nverbatim rule, \u22128 per flagged message", old),
                           ("new server\nword judge, \u221250 per message with a word", new)):
         for d in group:
             pts = block_points(d)
             if pts["rounds"] < 8:
                 continue
-            label = d.name.split("-")[1] if d.name[0].isdigit() else f"{d.name[0]} {d.name.split('-')[2]}"
+            if d.name[0].isdigit():
+                label = OLD_LABELS.get(d.name.split("-")[1], d.name.split("-")[1])
+            else:                                       # variant + block number within that variant
+                same = sorted(x.name for x in dirs if x.name[:2] == d.name[:2])
+                label = f"{d.name[0]}{same.index(d.name) + 1}"
             entries.append({"run": d.name, "server": server, "label": label, **pts})
 
     fig_rounds(by_variant, out / "fig1_rounds.png")
